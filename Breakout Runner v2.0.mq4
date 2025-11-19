@@ -96,6 +96,7 @@ extern double NextMoveTriggerPct = 25.0;
 datetime timestart, timeend;
 int BarsRangeStart, BarstoCount, BuyTotal, SellTotal;
 double RangeHigh, RangeLow, RangeSize;
+int lastRangeDay = 0; // Track the day when range was last set
 
 // Simplified Position Data Management using arrays
 int positionTickets[100]; // Store up to 100 position tickets
@@ -152,6 +153,10 @@ int OnInit()
    ArrayInitialize(positionBreakevenPrice, 0);
    ArrayInitialize(positionInitialSL, 0);
    ArrayInitialize(positionType, 0);
+
+   // Initialize range tracking
+   lastRangeDay = 0;
+   BarsRangeStart = 0;
 
    return(INIT_SUCCEEDED);
 }
@@ -731,6 +736,18 @@ string GetTimeframeName(int level)
 //+------------------------------------------------------------------+
 void ConvertTimes()
 {
+   int currentDay = TimeDay(TimeCurrent());
+
+   // Reset range tracking when a new day begins
+   if(lastRangeDay != 0 && lastRangeDay != currentDay)
+   {
+      BarsRangeStart = 0;
+      RangeHigh = 0;
+      RangeLow = 0;
+      RangeSize = 0;
+      Print("New trading day detected. Resetting range tracking. Previous day: ", lastRangeDay, ", Current day: ", currentDay);
+   }
+
    string currentDate = StringFormat("%d.%02d.%02d", TimeYear(TimeCurrent()), TimeMonth(TimeCurrent()), TimeDay(TimeCurrent()));
    string startTimeStr = StringFormat("%s %02d:%02d", currentDate, RangeStartHour, RangeStartMin);
    string endTimeStr = StringFormat("%s %02d:%02d", currentDate, RangeEndHour, RangeEndMin);
@@ -741,6 +758,8 @@ void ConvertTimes()
    if(BarsRangeStart == 0 && TimeCurrent() >= timestart)
    {
       BarsRangeStart = Bars;
+      lastRangeDay = currentDay;
+      Print("Range tracking started for day ", currentDay, " at ", TimeToString(TimeCurrent()), ", BarsRangeStart = ", BarsRangeStart);
    }
 }
 
@@ -958,6 +977,7 @@ void CloseandResetAll()
    BarsRangeStart = 0;
    BuyTotal = 0;
    SellTotal = 0;
+   lastRangeDay = 0;
 
    // Reset position arrays
    positionCount = 0;
