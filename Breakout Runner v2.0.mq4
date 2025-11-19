@@ -226,60 +226,61 @@ bool IsValidSLModification(int orderType, double newSL, double currentSL, double
    currentSL = NormalizePrice(currentSL);
    currentPrice = NormalizePrice(currentPrice);
 
+   int digits = (int)MarketInfo(Symbol(), MODE_DIGITS);
+   double minDiff = NormalizeDouble(2 * Point, digits); // Minimum meaningful difference
+
    // Check if new SL is different from current SL
-   if(MathAbs(newSL - currentSL) < Point)
+   if(MathAbs(newSL - currentSL) < minDiff)
    {
-      Print("SL unchanged: New=", newSL, " Current=", currentSL);
+      // SL is unchanged, no need to modify
       return false;
    }
 
-   // Get minimum stop level
+   // Get minimum stop level (broker requirement)
    double minStopLevel = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point;
+
+   // Add tolerance for validation (10 points or minStopLevel, whichever is smaller)
+   double tolerance = MathMin(10 * Point, minStopLevel * 0.5);
+   if(tolerance == 0) tolerance = 10 * Point; // Fallback if minStopLevel is 0
 
    // For BUY orders, SL must be below current price
    if(orderType == OP_BUY)
    {
-      if(newSL >= currentPrice)
+      // Allow tolerance for price fluctuations
+      if(newSL > currentPrice + tolerance)
       {
-         Print("Invalid BUY SL: SL=", newSL, " must be below price=", currentPrice);
+         Print("Invalid BUY SL: SL=", newSL, " must be below price=", currentPrice, " (tolerance=", tolerance, ")");
          return false;
       }
 
-      // Check minimum distance
-      if(currentPrice - newSL < minStopLevel)
-      {
-         Print("BUY SL too close to price: Distance=", (currentPrice - newSL)/Point, " points, Min=", minStopLevel/Point, " points");
-         return false;
-      }
+      // Check minimum distance with tolerance
+      double distance = currentPrice - newSL;
+      if(distance < 0) distance = 0; // Handle case where price pulled back
 
-      // For buy, new SL should be higher than current SL (moving towards breakeven/profit)
-      // or at breakeven (equal to open price)
-      if(newSL < currentSL && currentSL > 0)
+      if(minStopLevel > 0 && distance < (minStopLevel - tolerance))
       {
-         Print("Warning: Moving BUY SL down from ", currentSL, " to ", newSL);
+         Print("BUY SL too close to price: Distance=", distance/Point, " points, Required=", minStopLevel/Point, " points");
+         return false;
       }
    }
    // For SELL orders, SL must be above current price
    else if(orderType == OP_SELL)
    {
-      if(newSL <= currentPrice)
+      // Allow tolerance for price fluctuations
+      if(newSL < currentPrice - tolerance)
       {
-         Print("Invalid SELL SL: SL=", newSL, " must be above price=", currentPrice);
+         Print("Invalid SELL SL: SL=", newSL, " must be above price=", currentPrice, " (tolerance=", tolerance, ")");
          return false;
       }
 
-      // Check minimum distance
-      if(newSL - currentPrice < minStopLevel)
-      {
-         Print("SELL SL too close to price: Distance=", (newSL - currentPrice)/Point, " points, Min=", minStopLevel/Point, " points");
-         return false;
-      }
+      // Check minimum distance with tolerance
+      double distance = newSL - currentPrice;
+      if(distance < 0) distance = 0; // Handle case where price pulled back
 
-      // For sell, new SL should be lower than current SL (moving towards breakeven/profit)
-      // or at breakeven (equal to open price)
-      if(newSL > currentSL && currentSL > 0)
+      if(minStopLevel > 0 && distance < (minStopLevel - tolerance))
       {
-         Print("Warning: Moving SELL SL up from ", currentSL, " to ", newSL);
+         Print("SELL SL too close to price: Distance=", distance/Point, " points, Required=", minStopLevel/Point, " points");
+         return false;
       }
    }
 
@@ -395,9 +396,17 @@ double GetATRTrendIndValue(int timeframe, int buffer = 1)
 //+------------------------------------------------------------------+
 void UpdatePositionDataArrays()
 {
-   // Reset position count and rebuild from current orders
-   positionCount = 0;
+   // Build temporary arrays to preserve existing position data
+   int tempTickets[100];
+   bool tempBreakevenReached[100];
+   bool tempNextMoveReached[100];
+   int tempTimeframeLevel[100];
+   double tempBreakevenPrice[100];
+   double tempInitialSL[100];
+   int tempType[100];
+   int tempCount = 0;
 
+   // Loop through all open orders
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
@@ -410,31 +419,60 @@ void UpdatePositionDataArrays()
                int ticket = OrderTicket();
 
                // Check if this position already exists in our array
-               bool exists = false;
+               int existingIndex = -1;
                for(int j = 0; j < positionCount; j++)
                {
                   if(positionTickets[j] == ticket)
                   {
-                     exists = true;
+                     existingIndex = j;
                      break;
                   }
                }
 
-               // If not exists, add it to array
-               if(!exists && positionCount < ArraySize(positionTickets))
+               // Add to temp array
+               if(tempCount < ArraySize(tempTickets))
                {
-                  positionTickets[positionCount] = ticket;
-                  positionBreakevenReached[positionCount] = false;
-                  positionNextMoveReached[positionCount] = false;
-                  positionTimeframeLevel[positionCount] = 0;
-                  positionBreakevenPrice[positionCount] = 0;
-                  positionInitialSL[positionCount] = OrderStopLoss();
-                  positionType[positionCount] = (posType == OP_BUY) ? 1 : 2;
-                  positionCount++;
+                  tempTickets[tempCount] = ticket;
+
+                  // If position already existed, preserve its state
+                  if(existingIndex >= 0)
+                  {
+                     tempBreakevenReached[tempCount] = positionBreakevenReached[existingIndex];
+                     tempNextMoveReached[tempCount] = positionNextMoveReached[existingIndex];
+                     tempTimeframeLevel[tempCount] = positionTimeframeLevel[existingIndex];
+                     tempBreakevenPrice[tempCount] = positionBreakevenPrice[existingIndex];
+                     tempInitialSL[tempCount] = positionInitialSL[existingIndex];
+                     tempType[tempCount] = positionType[existingIndex];
+                  }
+                  else
+                  {
+                     // New position - initialize with default values
+                     tempBreakevenReached[tempCount] = false;
+                     tempNextMoveReached[tempCount] = false;
+                     tempTimeframeLevel[tempCount] = 0;
+                     tempBreakevenPrice[tempCount] = 0;
+                     tempInitialSL[tempCount] = OrderStopLoss();
+                     tempType[tempCount] = (posType == OP_BUY) ? 1 : 2;
+                  }
+
+                  tempCount++;
                }
             }
          }
       }
+   }
+
+   // Copy temp arrays back to main arrays
+   positionCount = tempCount;
+   for(int k = 0; k < positionCount; k++)
+   {
+      positionTickets[k] = tempTickets[k];
+      positionBreakevenReached[k] = tempBreakevenReached[k];
+      positionNextMoveReached[k] = tempNextMoveReached[k];
+      positionTimeframeLevel[k] = tempTimeframeLevel[k];
+      positionBreakevenPrice[k] = tempBreakevenPrice[k];
+      positionInitialSL[k] = tempInitialSL[k];
+      positionType[k] = tempType[k];
    }
 }
 
