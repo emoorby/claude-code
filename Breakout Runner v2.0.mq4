@@ -376,6 +376,8 @@ string ErrorDescription(int errorCode)
 //+------------------------------------------------------------------+
 double GetATRTrendIndValue(int timeframe, int buffer = 1)
 {
+   static bool fallbackLogged[6] = {false, false, false, false, false, false}; // Track logging per timeframe
+
    // Try multiple buffer indices to find the correct ATR value
    for(int i = 0; i < 3; i++)
    {
@@ -390,7 +392,13 @@ double GetATRTrendIndValue(int timeframe, int buffer = 1)
    double atrValue = iATR(NULL, timeframe, 14, 0);
    if(atrValue > 0)
    {
-      Print("Using fallback ATR value: ", atrValue, " for timeframe ", GetTimeframeName(GetTimeframeLevel(timeframe)));
+      // Only log fallback message once per timeframe
+      int tfLevel = GetTimeframeLevel(timeframe);
+      if(!fallbackLogged[tfLevel])
+      {
+         Print("ATR_Trend_Ind not found. Using standard ATR for ", GetTimeframeName(tfLevel), " timeframe.");
+         fallbackLogged[tfLevel] = true;
+      }
       return atrValue;
    }
 
@@ -745,7 +753,8 @@ void ConvertTimes()
       RangeHigh = 0;
       RangeLow = 0;
       RangeSize = 0;
-      Print("New trading day detected. Resetting range tracking. Previous day: ", lastRangeDay, ", Current day: ", currentDay);
+      lastRangeDay = currentDay; // Update immediately to prevent repeated detection
+      Print("New trading day detected (", currentDay, "). Range tracking reset.");
    }
 
    string currentDate = StringFormat("%d.%02d.%02d", TimeYear(TimeCurrent()), TimeMonth(TimeCurrent()), TimeDay(TimeCurrent()));
@@ -758,7 +767,7 @@ void ConvertTimes()
    if(BarsRangeStart == 0 && TimeCurrent() >= timestart)
    {
       BarsRangeStart = Bars;
-      lastRangeDay = currentDay;
+      lastRangeDay = currentDay; // Also set here in case we start mid-day
       Print("Range tracking started for day ", currentDay, " at ", TimeToString(TimeCurrent()), ", BarsRangeStart = ", BarsRangeStart);
    }
 }
