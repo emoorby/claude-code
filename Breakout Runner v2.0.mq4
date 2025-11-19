@@ -406,6 +406,15 @@ void UpdatePositionDataArrays()
    int tempType[100];
    int tempCount = 0;
 
+   // Initialize temporary arrays
+   ArrayInitialize(tempTickets, 0);
+   ArrayInitialize(tempBreakevenReached, false);
+   ArrayInitialize(tempNextMoveReached, false);
+   ArrayInitialize(tempTimeframeLevel, 0);
+   ArrayInitialize(tempBreakevenPrice, 0);
+   ArrayInitialize(tempInitialSL, 0);
+   ArrayInitialize(tempType, 0);
+
    // Loop through all open orders
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
