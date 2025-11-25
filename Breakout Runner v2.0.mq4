@@ -604,17 +604,26 @@ void ManageBuyStopLoss(double currentPrice, double openPrice, double currentSL, 
          {
             Print("SUCCESS: Buy #", ticket, " SL updated to ", newSL, " (", GetTimeframeName(positionTimeframeLevel[posIndex]), " ATR)");
 
-            // Progress to next timeframe only if modification was successful
+            // Progress to next timeframe only if not at Daily yet
+            // Once at Daily (level 5), stay there and keep checking
             if(positionTimeframeLevel[posIndex] < 5)
             {
                positionTimeframeLevel[posIndex]++;
                Print("Buy #", ticket, " progressing to ", GetTimeframeName(positionTimeframeLevel[posIndex]), " timeframe");
             }
+            else
+            {
+               Print("Buy #", ticket, " staying at Daily timeframe, will continue monitoring");
+            }
          }
       }
       else if(atrTrendValue > 0)
       {
-         Print("Buy #", ticket, " - ATR condition not met: ATR=", atrTrendValue, ", CurrentSL=", currentSL, ", Breakeven=", positionBreakevenPrice[posIndex]);
+         // Don't spam logs - only print when at lower timeframes or occasionally at D1
+         if(positionTimeframeLevel[posIndex] < 5)
+         {
+            Print("Buy #", ticket, " - ATR condition not met: ATR=", atrTrendValue, ", CurrentSL=", currentSL, ", Breakeven=", positionBreakevenPrice[posIndex]);
+         }
       }
    }
 }
@@ -681,17 +690,26 @@ void ManageSellStopLoss(double currentPrice, double openPrice, double currentSL,
          {
             Print("SUCCESS: Sell #", ticket, " SL updated to ", newSL, " (", GetTimeframeName(positionTimeframeLevel[posIndex]), " ATR)");
 
-            // Progress to next timeframe only if modification was successful
+            // Progress to next timeframe only if not at Daily yet
+            // Once at Daily (level 5), stay there and keep checking
             if(positionTimeframeLevel[posIndex] < 5)
             {
                positionTimeframeLevel[posIndex]++;
                Print("Sell #", ticket, " progressing to ", GetTimeframeName(positionTimeframeLevel[posIndex]), " timeframe");
             }
+            else
+            {
+               Print("Sell #", ticket, " staying at Daily timeframe, will continue monitoring");
+            }
          }
       }
       else if(atrTrendValue > 0)
       {
-         Print("Sell #", ticket, " - ATR condition not met: ATR=", atrTrendValue, ", CurrentSL=", currentSL, ", Breakeven=", positionBreakevenPrice[posIndex]);
+         // Don't spam logs - only print when at lower timeframes or occasionally at D1
+         if(positionTimeframeLevel[posIndex] < 5)
+         {
+            Print("Sell #", ticket, " - ATR condition not met: ATR=", atrTrendValue, ", CurrentSL=", currentSL, ", Breakeven=", positionBreakevenPrice[posIndex]);
+         }
       }
    }
 }
@@ -859,35 +877,88 @@ void PrepareOrder()
    if(TimeCurrent() > timeend)
    {
       double ask = Ask;
+      double bid = Bid;
       double point = MarketInfo(Symbol(), MODE_POINT);
       double pipSize = point * 10;
 
-      if(RangeSize > MinRangeSize * pipSize && RangeSize < MaxRangeSize * pipSize)
+      // Validate range values
+      if(RangeHigh <= 0 || RangeLow <= 0 || RangeSize <= 0)
       {
-         if(ask < RangeHigh - (RangeSize * OrdDistpct / 100) && ask > RangeLow + (RangeSize * OrdDistpct / 100))
+         Print("WARNING: Invalid range values - High: ", RangeHigh, ", Low: ", RangeLow, ", Size: ", RangeSize);
+         return;
+      }
+
+      // Check if range size is within valid limits
+      if(RangeSize <= MinRangeSize * pipSize || RangeSize >= MaxRangeSize * pipSize)
+      {
+         Print("Range size outside limits: ", NormalizeDouble(RangeSize/pipSize, 1), " pips (Min: ", MinRangeSize, ", Max: ", MaxRangeSize, ")");
+         return;
+      }
+
+      double minDistFromHigh = RangeSize * OrdDistpct / 100;
+      double minDistFromLow = RangeSize * OrdDistpct / 100;
+
+      // Check if price is in valid zone for order placement
+      if(ask >= RangeHigh - minDistFromHigh || ask <= RangeLow + minDistFromLow)
+      {
+         Print("Price too close to range boundaries. Ask: ", ask, ", High: ", RangeHigh, ", Low: ", RangeLow, ", MinDist: ", minDistFromHigh/point, " points");
+         return;
+      }
+
+      // Log order preparation attempt
+      Print("Preparing orders - Range: ", RangeHigh, " to ", RangeLow, " (", NormalizeDouble(RangeSize/pipSize, 1), " pips), Ask: ", ask);
+      Print("Trading filters - MA_BuyOn: ", MA_BuyOn, ", MA_SellOn: ", MA_SellOn, ", Ichi_BuyOn: ", Ichi_BuyOn, ", Ichi_SellOn: ", Ichi_SellOn);
+
+      if(TradingStyle == 0)  // With_Break
+      {
+         if(BuyTotal <= 0 && MA_BuyOn == true && Ichi_BuyOn == true)
          {
-            if(TradingStyle == 0)
-            {
-               if(BuyTotal <= 0 && MA_BuyOn == true && Ichi_BuyOn == true)
-               {
-                  OpenTrade(OP_BUYSTOP, RangeHigh, RangeHigh - (RangeSize * SLPercent / 100));
-               }
-               if(SellTotal <= 0 && MA_SellOn == true && Ichi_SellOn == true)
-               {
-                  OpenTrade(OP_SELLSTOP, RangeLow, RangeLow + (RangeSize * SLPercent / 100));
-               }
-            }
-            if(TradingStyle == 1)
-            {
-               if(BuyTotal <= 0 && MA_BuyOn == true && Ichi_BuyOn == true)
-               {
-                  OpenTrade(OP_BUYLIMIT, RangeLow, RangeLow - (RangeSize * SLPercent / 100));
-               }
-               if(SellTotal <= 0 && MA_SellOn == true && Ichi_SellOn == true)
-               {
-                  OpenTrade(OP_SELLLIMIT, RangeHigh, RangeHigh + (RangeSize * SLPercent / 100));
-               }
-            }
+            double buyPrice = NormalizePrice(RangeHigh);
+            double buySL = NormalizePrice(RangeHigh - (RangeSize * SLPercent / 100));
+            Print("Attempting BuyStop: Price=", buyPrice, ", SL=", buySL, ", Current Ask=", ask);
+            OpenTrade(OP_BUYSTOP, buyPrice, buySL);
+         }
+         else if(BuyTotal <= 0)
+         {
+            Print("BuyStop skipped - BuyTotal:", BuyTotal, ", MA_BuyOn:", MA_BuyOn, ", Ichi_BuyOn:", Ichi_BuyOn);
+         }
+
+         if(SellTotal <= 0 && MA_SellOn == true && Ichi_SellOn == true)
+         {
+            double sellPrice = NormalizePrice(RangeLow);
+            double sellSL = NormalizePrice(RangeLow + (RangeSize * SLPercent / 100));
+            Print("Attempting SellStop: Price=", sellPrice, ", SL=", sellSL, ", Current Bid=", bid);
+            OpenTrade(OP_SELLSTOP, sellPrice, sellSL);
+         }
+         else if(SellTotal <= 0)
+         {
+            Print("SellStop skipped - SellTotal:", SellTotal, ", MA_SellOn:", MA_SellOn, ", Ichi_SellOn:", Ichi_SellOn);
+         }
+      }
+      else if(TradingStyle == 1)  // Opposite_to_Break
+      {
+         if(BuyTotal <= 0 && MA_BuyOn == true && Ichi_BuyOn == true)
+         {
+            double buyPrice = NormalizePrice(RangeLow);
+            double buySL = NormalizePrice(RangeLow - (RangeSize * SLPercent / 100));
+            Print("Attempting BuyLimit: Price=", buyPrice, ", SL=", buySL, ", Current Ask=", ask);
+            OpenTrade(OP_BUYLIMIT, buyPrice, buySL);
+         }
+         else if(BuyTotal <= 0)
+         {
+            Print("BuyLimit skipped - BuyTotal:", BuyTotal, ", MA_BuyOn:", MA_BuyOn, ", Ichi_BuyOn:", Ichi_BuyOn);
+         }
+
+         if(SellTotal <= 0 && MA_SellOn == true && Ichi_SellOn == true)
+         {
+            double sellPrice = NormalizePrice(RangeHigh);
+            double sellSL = NormalizePrice(RangeHigh + (RangeSize * SLPercent / 100));
+            Print("Attempting SellLimit: Price=", sellPrice, ", SL=", sellSL, ", Current Bid=", bid);
+            OpenTrade(OP_SELLLIMIT, sellPrice, sellSL);
+         }
+         else if(SellTotal <= 0)
+         {
+            Print("SellLimit skipped - SellTotal:", SellTotal, ", MA_SellOn:", MA_SellOn, ", Ichi_SellOn:", Ichi_SellOn);
          }
       }
    }
@@ -896,38 +967,54 @@ void PrepareOrder()
 //+------------------------------------------------------------------+
 void OpenTrade(int type, double price, double sl)
 {
-   if((MAFilterOn == true && MA_BuyOn == true) &&
+   // Normalize prices
+   price = NormalizePrice(price);
+   sl = NormalizePrice(sl);
+
+   // Check MA filter for buy orders
+   if((MAFilterOn == true) &&
       (type == OP_BUYLIMIT || type == OP_BUYSTOP) &&
       (PricevsMovAvg() == "below" || PricevsMovAvg() == "error"))
    {
+      Print("Buy order rejected by MA filter. Price vs MA: ", PricevsMovAvg());
       MA_BuyOn = false;
       return;
    }
-   if((MAFilterOn == true && MA_SellOn == true) &&
+
+   // Check MA filter for sell orders
+   if((MAFilterOn == true) &&
       (type == OP_SELLLIMIT || type == OP_SELLSTOP) &&
       (PricevsMovAvg() == "above" || PricevsMovAvg() == "error"))
    {
+      Print("Sell order rejected by MA filter. Price vs MA: ", PricevsMovAvg());
       MA_SellOn = false;
       return;
    }
 
-   if((IchimokuFilter == true && Ichi_BuyOn == true) &&
+   // Check Ichimoku filter for buy orders
+   if((IchimokuFilter == true) &&
       (type == OP_BUYLIMIT || type == OP_BUYSTOP) &&
       (PricevsIchiCloud() == "below" || PricevsIchiCloud() == "Incloud"))
    {
+      Print("Buy order rejected by Ichimoku filter. Price vs Cloud: ", PricevsIchiCloud());
       Ichi_BuyOn = false;
       return;
    }
-   if((IchimokuFilter == true && Ichi_SellOn == true) &&
+
+   // Check Ichimoku filter for sell orders
+   if((IchimokuFilter == true) &&
       (type == OP_SELLLIMIT || type == OP_SELLSTOP) &&
       (PricevsIchiCloud() == "above" || PricevsIchiCloud() == "Incloud"))
    {
+      Print("Sell order rejected by Ichimoku filter. Price vs Cloud: ", PricevsIchiCloud());
       Ichi_SellOn = false;
       return;
    }
 
-   double tp = price + (price - sl) * TPPercent / SLPercent;
+   // Calculate TP
+   double tp = NormalizePrice(price + (price - sl) * TPPercent / SLPercent);
 
+   // Calculate lot size
    double lots = 0.01;
    if(LotSizeType == 0)
    {
@@ -938,15 +1025,41 @@ void OpenTrade(int type, double price, double sl)
       lots = calcLots(price - sl);
    }
 
+   // Validate pending order prices
+   double ask = Ask;
+   double bid = Bid;
+   double minStopLevel = MarketInfo(Symbol(), MODE_STOPLEVEL) * Point;
+
+   if(type == OP_BUYSTOP && price < ask + minStopLevel)
+   {
+      Print("ERROR: BuyStop price too close to market. Price: ", price, ", Ask: ", ask, ", MinDist: ", minStopLevel/Point, " points");
+      return;
+   }
+   if(type == OP_SELLSTOP && price > bid - minStopLevel)
+   {
+      Print("ERROR: SellStop price too close to market. Price: ", price, ", Bid: ", bid, ", MinDist: ", minStopLevel/Point, " points");
+      return;
+   }
+   if(type == OP_BUYLIMIT && price > ask - minStopLevel)
+   {
+      Print("ERROR: BuyLimit price too close to market. Price: ", price, ", Ask: ", ask, ", MinDist: ", minStopLevel/Point, " points");
+      return;
+   }
+   if(type == OP_SELLLIMIT && price < bid + minStopLevel)
+   {
+      Print("ERROR: SellLimit price too close to market. Price: ", price, ", Bid: ", bid, ", MinDist: ", minStopLevel/Point, " points");
+      return;
+   }
+
    int ticket = OrderSend(Symbol(), type, lots, price, 3, sl, tp, TradeComment, InpMagic, 0, clrBlue);
    if(ticket < 0)
    {
       int error = GetLastError();
-      Print("Open Failed for ", Symbol(), ", ", type, ", price=", price, ", sl=", sl, ", tp=", tp, " Error: ", error);
+      Print("OrderSend FAILED: ", Symbol(), " Type:", type, " Price:", price, " SL:", sl, " TP:", tp, " Lots:", lots, " Error:", error, " (", ErrorDescription(error), ")");
    }
    else
    {
-      Print("Order opened successfully: Ticket #", ticket, ", Type: ", type, ", Price: ", price, ", SL: ", sl, ", TP: ", tp);
+      Print("Order opened successfully: Ticket #", ticket, ", Type: ", type, ", Price: ", price, ", SL: ", sl, ", TP: ", tp, ", Lots: ", lots);
 
       // Update position data for the new order
       UpdatePositionDataArrays();
