@@ -320,9 +320,9 @@ void PlaceStopOrders()
    {
       request.action = TRADE_ACTION_PENDING;
       request.type = ORDER_TYPE_BUY_STOP;
-      request.price = g_rangeHigh;
-      request.sl = g_rangeHigh - slDistance;
-      request.tp = g_rangeHigh + tpDistance;
+      request.price = NormalizeDouble(g_rangeHigh, _Digits);
+      request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
+      request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
 
       Print("Placing BUY STOP order:");
       Print("  Price: ", request.price);
@@ -365,9 +365,9 @@ void PlaceStopOrders()
       request.volume = lotSize;
       request.magic = InpMagicNumber;
       request.type = ORDER_TYPE_SELL_STOP;
-      request.price = g_rangeLow;
-      request.sl = g_rangeLow + slDistance;
-      request.tp = g_rangeLow - tpDistance;
+      request.price = NormalizeDouble(g_rangeLow, _Digits);
+      request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
+      request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
       request.deviation = 10;
       request.type_filling = ORDER_FILLING_IOC;
 
@@ -456,6 +456,13 @@ void CheckAndReplaceOrders()
       Print("Replacing triggered orders...");
       Print("Remaining trades allowed: ", InpMaxTradesPerDay - g_tradesCount);
 
+      // Get current market prices
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+
+      Print("Current Ask: ", ask, " Bid: ", bid, " Stop Level: ", stopLevel);
+
       // Calculate stop loss and take profit distances
       double slDistance = g_rangeSize * InpStopLossPercent / 100.0;
       double tpDistance = g_rangeSize * InpTakeProfitPercent / 100.0;
@@ -467,6 +474,18 @@ void CheckAndReplaceOrders()
       // Replace Buy Stop if it was triggered
       if(buyOrderTriggered && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_BUY_ONLY))
       {
+         // Check if original range high price is still valid for a buy stop
+         double buyStopPrice = g_rangeHigh;
+         double minBuyStopPrice = ask + stopLevel;
+
+         if(buyStopPrice < minBuyStopPrice)
+         {
+            Print("WARNING: Original buy stop price (", buyStopPrice,
+                  ") is below minimum allowed (", minBuyStopPrice, ")");
+            buyStopPrice = minBuyStopPrice;
+            Print("Adjusting buy stop price to: ", buyStopPrice);
+         }
+
          ZeroMemory(request);
          ZeroMemory(result);
 
@@ -475,13 +494,16 @@ void CheckAndReplaceOrders()
          request.volume = lotSize;
          request.magic = InpMagicNumber;
          request.type = ORDER_TYPE_BUY_STOP;
-         request.price = g_rangeHigh;
-         request.sl = g_rangeHigh - slDistance;
-         request.tp = g_rangeHigh + tpDistance;
+         request.price = NormalizeDouble(buyStopPrice, _Digits);
+         request.sl = NormalizeDouble(buyStopPrice - slDistance, _Digits);
+         request.tp = NormalizeDouble(buyStopPrice + tpDistance, _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
-         Print("Replacing BUY STOP order at: ", request.price);
+         Print("Replacing BUY STOP order:");
+         Print("  Price: ", request.price);
+         Print("  Stop Loss: ", request.sl);
+         Print("  Take Profit: ", request.tp);
 
          if(OrderSend(request, result))
          {
@@ -492,14 +514,31 @@ void CheckAndReplaceOrders()
             }
             else
             {
-               Print("ERROR: Buy Stop replacement failed. Return code: ", result.retcode);
+               Print("ERROR: Buy Stop replacement failed. Return code: ", result.retcode,
+                     " (", GetRetcodeDescription(result.retcode), ")");
             }
+         }
+         else
+         {
+            Print("ERROR: OrderSend failed for Buy Stop replacement");
          }
       }
 
       // Replace Sell Stop if it was triggered
       if(sellOrderTriggered && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_SELL_ONLY))
       {
+         // Check if original range low price is still valid for a sell stop
+         double sellStopPrice = g_rangeLow;
+         double maxSellStopPrice = bid - stopLevel;
+
+         if(sellStopPrice > maxSellStopPrice)
+         {
+            Print("WARNING: Original sell stop price (", sellStopPrice,
+                  ") is above maximum allowed (", maxSellStopPrice, ")");
+            sellStopPrice = maxSellStopPrice;
+            Print("Adjusting sell stop price to: ", sellStopPrice);
+         }
+
          ZeroMemory(request);
          ZeroMemory(result);
 
@@ -508,13 +547,16 @@ void CheckAndReplaceOrders()
          request.volume = lotSize;
          request.magic = InpMagicNumber;
          request.type = ORDER_TYPE_SELL_STOP;
-         request.price = g_rangeLow;
-         request.sl = g_rangeLow + slDistance;
-         request.tp = g_rangeLow - tpDistance;
+         request.price = NormalizeDouble(sellStopPrice, _Digits);
+         request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
+         request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
-         Print("Replacing SELL STOP order at: ", request.price);
+         Print("Replacing SELL STOP order:");
+         Print("  Price: ", request.price);
+         Print("  Stop Loss: ", request.sl);
+         Print("  Take Profit: ", request.tp);
 
          if(OrderSend(request, result))
          {
@@ -525,8 +567,13 @@ void CheckAndReplaceOrders()
             }
             else
             {
-               Print("ERROR: Sell Stop replacement failed. Return code: ", result.retcode);
+               Print("ERROR: Sell Stop replacement failed. Return code: ", result.retcode,
+                     " (", GetRetcodeDescription(result.retcode), ")");
             }
+         }
+         else
+         {
+            Print("ERROR: OrderSend failed for Sell Stop replacement");
          }
       }
 
