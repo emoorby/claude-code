@@ -57,6 +57,7 @@ input int      InpMagicNumber       = 123456; // Magic Number
 double   g_rangeHigh = 0.0;           // High of the range
 double   g_rangeLow = 0.0;            // Low of the range
 bool     g_rangeIdentified = false;   // Flag: range has been identified
+bool     g_rangeProcessed = false;    // Flag: range finalization has been attempted
 bool     g_ordersPlaced = false;      // Flag: initial orders placed
 int      g_tradesCount = 0;           // Number of trades executed today
 int      g_currentDay = 0;            // Current day for daily reset
@@ -125,10 +126,11 @@ void OnTick()
    {
       UpdateRange();
    }
-   else if(IsAfterRangeTime(time_struct) && !g_rangeIdentified)
+   else if(IsAfterRangeTime(time_struct) && !g_rangeProcessed)
    {
-      // Range period has ended, finalize the range
+      // Range period has ended, finalize the range (only once per day)
       FinalizeRange();
+      g_rangeProcessed = true;  // Mark as processed to prevent repeated messages
    }
 
    // If range is identified but orders not placed, place them
@@ -621,6 +623,7 @@ void CheckNewDay()
       g_rangeLow = 0.0;
       g_rangeSize = 0.0;
       g_rangeIdentified = false;
+      g_rangeProcessed = false;
       g_ordersPlaced = false;
       g_tradesCount = 0;
       g_buyStopTicket = 0;
