@@ -289,6 +289,18 @@ void PlaceStopOrders()
    Print("========================================");
    Print("Attempting to place stop orders...");
 
+   // Get current market information
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spread = ask - bid;
+   long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double stopLevelPrice = stopLevel * _Point;
+
+   Print("Current Market Info:");
+   Print("  Ask: ", ask, " | Bid: ", bid);
+   Print("  Spread: ", spread, " (", (spread/_Point), " points)");
+   Print("  Broker Stop Level: ", stopLevel, " points (", stopLevelPrice, " price)");
+
    // Calculate stop loss and take profit distances
    double slDistance = g_rangeSize * InpStopLossPercent / 100.0;
    double tpDistance = g_rangeSize * InpTakeProfitPercent / 100.0;
@@ -304,6 +316,34 @@ void PlaceStopOrders()
       Print("ERROR: Invalid lot size calculated: ", lotSize);
       Print("========================================");
       return;
+   }
+
+   // Calculate adjusted order prices with automatic buffer
+   // Buffer = max(stop level, spread) + 2 points for safety
+   double buffer = MathMax(stopLevelPrice, spread) + (2 * _Point);
+
+   double buyStopPrice = g_rangeHigh;
+   double minBuyStopPrice = ask + buffer;
+
+   if(buyStopPrice < minBuyStopPrice)
+   {
+      Print("WARNING: Original buy stop price (", buyStopPrice,
+            ") too close to Ask (", ask, ")");
+      Print("  Minimum required: ", minBuyStopPrice, " (Ask + ", buffer, " buffer)");
+      buyStopPrice = minBuyStopPrice;
+      Print("  Adjusted buy stop price to: ", buyStopPrice);
+   }
+
+   double sellStopPrice = g_rangeLow;
+   double maxSellStopPrice = bid - buffer;
+
+   if(sellStopPrice > maxSellStopPrice)
+   {
+      Print("WARNING: Original sell stop price (", sellStopPrice,
+            ") too close to Bid (", bid, ")");
+      Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
+      sellStopPrice = maxSellStopPrice;
+      Print("  Adjusted sell stop price to: ", sellStopPrice);
    }
 
    MqlTradeRequest request;
@@ -322,9 +362,9 @@ void PlaceStopOrders()
    {
       request.action = TRADE_ACTION_PENDING;
       request.type = ORDER_TYPE_BUY_STOP;
-      request.price = NormalizeDouble(g_rangeHigh, _Digits);
-      request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
-      request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
+      request.price = NormalizeDouble(buyStopPrice, _Digits);
+      request.sl = NormalizeDouble(buyStopPrice - slDistance, _Digits);
+      request.tp = NormalizeDouble(buyStopPrice + tpDistance, _Digits);
 
       Print("Placing BUY STOP order:");
       Print("  Price: ", request.price);
@@ -343,11 +383,14 @@ void PlaceStopOrders()
          {
             Print("ERROR: Buy Stop order failed. Return code: ", result.retcode,
                   " (", GetRetcodeDescription(result.retcode), ")");
+            Print("  Error details: ", result.comment);
          }
       }
       else
       {
-         Print("ERROR: OrderSend failed for Buy Stop");
+         int lastError = GetLastError();
+         Print("ERROR: OrderSend failed for Buy Stop. Error code: ", lastError);
+         Print("  Error description: ", ErrorDescription(lastError));
       }
    }
    else
@@ -367,9 +410,9 @@ void PlaceStopOrders()
       request.volume = lotSize;
       request.magic = InpMagicNumber;
       request.type = ORDER_TYPE_SELL_STOP;
-      request.price = NormalizeDouble(g_rangeLow, _Digits);
-      request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
-      request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
+      request.price = NormalizeDouble(sellStopPrice, _Digits);
+      request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
+      request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
       request.deviation = 10;
       request.type_filling = ORDER_FILLING_IOC;
 
@@ -390,11 +433,14 @@ void PlaceStopOrders()
          {
             Print("ERROR: Sell Stop order failed. Return code: ", result.retcode,
                   " (", GetRetcodeDescription(result.retcode), ")");
+            Print("  Error details: ", result.comment);
          }
       }
       else
       {
-         Print("ERROR: OrderSend failed for Sell Stop");
+         int lastError = GetLastError();
+         Print("ERROR: OrderSend failed for Sell Stop. Error code: ", lastError);
+         Print("  Error description: ", ErrorDescription(lastError));
       }
    }
    else
@@ -660,6 +706,42 @@ string GetRetcodeDescription(uint retcode)
       case TRADE_RETCODE_PRICE_OFF: return "No quotes";
       case TRADE_RETCODE_CONNECTION: return "No connection";
       default: return "Unknown return code";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get error description                                            |
+//+------------------------------------------------------------------+
+string ErrorDescription(int error_code)
+{
+   switch(error_code)
+   {
+      case 0:    return "Success";
+      case 4: return "Invalid parameters";
+      case 5:    return "Old client terminal version";
+      case 64:   return "Account blocked";
+      case 65:   return "Invalid account";
+      case 128:  return "Trade timeout";
+      case 129:  return "Invalid price";
+      case 130:  return "Invalid stops";
+      case 131:  return "Invalid trade volume";
+      case 132:  return "Market is closed";
+      case 133:  return "Trade is disabled";
+      case 134:  return "Not enough money";
+      case 135:  return "Price changed";
+      case 136:  return "Off quotes";
+      case 137:  return "Broker is busy";
+      case 138:  return "Requote";
+      case 139:  return "Order is locked";
+      case 140:  return "Buy orders only allowed";
+      case 141:  return "Too many requests";
+      case 145:  return "Modification denied because order too close to market";
+      case 146:  return "Trade context is busy";
+      case 147:  return "Expiration denied by broker";
+      case 148:  return "Too many orders";
+      case 149:  return "Hedging prohibited";
+      case 150:  return "Prohibited by FIFO rules";
+      default:   return "Unknown error";
    }
 }
 //+------------------------------------------------------------------+
