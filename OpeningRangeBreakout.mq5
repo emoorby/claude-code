@@ -528,9 +528,73 @@ void CheckAndReplaceOrders()
       MqlTradeRequest request;
       MqlTradeResult result;
 
-      // Replace Buy Stop if it was triggered
-      if(buyOrderTriggered && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_BUY_ONLY))
+      // Replace SELL Stop when BUY was triggered (only if sell stop doesn't already exist)
+      if(buyOrderTriggered && g_sellStopTicket == 0 && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_SELL_ONLY))
       {
+         Print("Buy order was triggered - checking if sell stop needs replacement...");
+         Print("Sell stop ticket: ", g_sellStopTicket, " (0 = doesn't exist)");
+
+         // Check if original range low price is still valid for a sell stop
+         double sellStopPrice = g_rangeLow;
+         double maxSellStopPrice = bid - buffer;
+
+         if(sellStopPrice > maxSellStopPrice)
+         {
+            Print("WARNING: Original sell stop price (", sellStopPrice,
+                  ") too close to Bid (", bid, ")");
+            Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
+            sellStopPrice = maxSellStopPrice;
+            Print("  Adjusted sell stop price to: ", sellStopPrice);
+         }
+
+         ZeroMemory(request);
+         ZeroMemory(result);
+
+         request.action = TRADE_ACTION_PENDING;
+         request.symbol = _Symbol;
+         request.volume = lotSize;
+         request.magic = InpMagicNumber;
+         request.type = ORDER_TYPE_SELL_STOP;
+         request.price = NormalizeDouble(sellStopPrice, _Digits);
+         request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
+         request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
+         request.deviation = 10;
+         request.type_filling = ORDER_FILLING_IOC;
+
+         Print("Replacing SELL STOP order:");
+         Print("  Price: ", request.price);
+         Print("  Stop Loss: ", request.sl);
+         Print("  Take Profit: ", request.tp);
+
+         if(OrderSend(request, result))
+         {
+            if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
+            {
+               g_sellStopTicket = result.order;
+               Print("SUCCESS: Sell Stop order replaced. New Ticket: ", g_sellStopTicket);
+            }
+            else
+            {
+               Print("ERROR: Sell Stop replacement failed. Return code: ", result.retcode,
+                     " (", GetRetcodeDescription(result.retcode), ")");
+            }
+         }
+         else
+         {
+            Print("ERROR: OrderSend failed for Sell Stop replacement");
+         }
+      }
+      else if(buyOrderTriggered && g_sellStopTicket > 0)
+      {
+         Print("Buy order was triggered - sell stop already exists (Ticket: ", g_sellStopTicket, "), no replacement needed");
+      }
+
+      // Replace BUY Stop when SELL was triggered (only if buy stop doesn't already exist)
+      if(sellOrderTriggered && g_buyStopTicket == 0 && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_BUY_ONLY))
+      {
+         Print("Sell order was triggered - checking if buy stop needs replacement...");
+         Print("Buy stop ticket: ", g_buyStopTicket, " (0 = doesn't exist)");
+
          // Check if original range high price is still valid for a buy stop
          double buyStopPrice = g_rangeHigh;
          double minBuyStopPrice = ask + buffer;
@@ -581,59 +645,9 @@ void CheckAndReplaceOrders()
             Print("ERROR: OrderSend failed for Buy Stop replacement");
          }
       }
-
-      // Replace Sell Stop if it was triggered
-      if(sellOrderTriggered && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_SELL_ONLY))
+      else if(sellOrderTriggered && g_buyStopTicket > 0)
       {
-         // Check if original range low price is still valid for a sell stop
-         double sellStopPrice = g_rangeLow;
-         double maxSellStopPrice = bid - buffer;
-
-         if(sellStopPrice > maxSellStopPrice)
-         {
-            Print("WARNING: Original sell stop price (", sellStopPrice,
-                  ") too close to Bid (", bid, ")");
-            Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
-            sellStopPrice = maxSellStopPrice;
-            Print("  Adjusted sell stop price to: ", sellStopPrice);
-         }
-
-         ZeroMemory(request);
-         ZeroMemory(result);
-
-         request.action = TRADE_ACTION_PENDING;
-         request.symbol = _Symbol;
-         request.volume = lotSize;
-         request.magic = InpMagicNumber;
-         request.type = ORDER_TYPE_SELL_STOP;
-         request.price = NormalizeDouble(sellStopPrice, _Digits);
-         request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
-         request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
-         request.deviation = 10;
-         request.type_filling = ORDER_FILLING_IOC;
-
-         Print("Replacing SELL STOP order:");
-         Print("  Price: ", request.price);
-         Print("  Stop Loss: ", request.sl);
-         Print("  Take Profit: ", request.tp);
-
-         if(OrderSend(request, result))
-         {
-            if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
-            {
-               g_sellStopTicket = result.order;
-               Print("SUCCESS: Sell Stop order replaced. New Ticket: ", g_sellStopTicket);
-            }
-            else
-            {
-               Print("ERROR: Sell Stop replacement failed. Return code: ", result.retcode,
-                     " (", GetRetcodeDescription(result.retcode), ")");
-            }
-         }
-         else
-         {
-            Print("ERROR: OrderSend failed for Sell Stop replacement");
-         }
+         Print("Sell order was triggered - buy stop already exists (Ticket: ", g_buyStopTicket, "), no replacement needed");
       }
 
       Print("========================================");
