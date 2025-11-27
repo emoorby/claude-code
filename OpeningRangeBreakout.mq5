@@ -507,9 +507,18 @@ void CheckAndReplaceOrders()
       // Get current market prices
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+      double spread = ask - bid;
+      long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      double stopLevelPrice = stopLevel * _Point;
 
-      Print("Current Ask: ", ask, " Bid: ", bid, " Stop Level: ", stopLevel);
+      // Calculate intelligent buffer (same as initial order placement)
+      double buffer = MathMax(stopLevelPrice, spread) + (2 * _Point);
+
+      Print("Current Market Info:");
+      Print("  Ask: ", ask, " | Bid: ", bid);
+      Print("  Spread: ", spread, " (", (spread/_Point), " points)");
+      Print("  Stop Level: ", stopLevel, " points (", stopLevelPrice, " price)");
+      Print("  Calculated Buffer: ", buffer, " (", (buffer/_Point), " points)");
 
       // Calculate stop loss and take profit distances
       double slDistance = g_rangeSize * InpStopLossPercent / 100.0;
@@ -524,14 +533,15 @@ void CheckAndReplaceOrders()
       {
          // Check if original range high price is still valid for a buy stop
          double buyStopPrice = g_rangeHigh;
-         double minBuyStopPrice = ask + stopLevel;
+         double minBuyStopPrice = ask + buffer;
 
          if(buyStopPrice < minBuyStopPrice)
          {
             Print("WARNING: Original buy stop price (", buyStopPrice,
-                  ") is below minimum allowed (", minBuyStopPrice, ")");
+                  ") too close to Ask (", ask, ")");
+            Print("  Minimum required: ", minBuyStopPrice, " (Ask + ", buffer, " buffer)");
             buyStopPrice = minBuyStopPrice;
-            Print("Adjusting buy stop price to: ", buyStopPrice);
+            Print("  Adjusted buy stop price to: ", buyStopPrice);
          }
 
          ZeroMemory(request);
@@ -577,14 +587,15 @@ void CheckAndReplaceOrders()
       {
          // Check if original range low price is still valid for a sell stop
          double sellStopPrice = g_rangeLow;
-         double maxSellStopPrice = bid - stopLevel;
+         double maxSellStopPrice = bid - buffer;
 
          if(sellStopPrice > maxSellStopPrice)
          {
             Print("WARNING: Original sell stop price (", sellStopPrice,
-                  ") is above maximum allowed (", maxSellStopPrice, ")");
+                  ") too close to Bid (", bid, ")");
+            Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
             sellStopPrice = maxSellStopPrice;
-            Print("Adjusting sell stop price to: ", sellStopPrice);
+            Print("  Adjusted sell stop price to: ", sellStopPrice);
          }
 
          ZeroMemory(request);
