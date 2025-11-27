@@ -363,8 +363,9 @@ void PlaceStopOrders()
       request.action = TRADE_ACTION_PENDING;
       request.type = ORDER_TYPE_BUY_STOP;
       request.price = NormalizeDouble(buyStopPrice, _Digits);
-      request.sl = NormalizeDouble(buyStopPrice - slDistance, _Digits);
-      request.tp = NormalizeDouble(buyStopPrice + tpDistance, _Digits);
+      // SL and TP calculated from ORIGINAL range high, not adjusted entry price
+      request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
+      request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
 
       Print("Placing BUY STOP order:");
       Print("  Price: ", request.price);
@@ -411,8 +412,9 @@ void PlaceStopOrders()
       request.magic = InpMagicNumber;
       request.type = ORDER_TYPE_SELL_STOP;
       request.price = NormalizeDouble(sellStopPrice, _Digits);
-      request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
-      request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
+      // SL and TP calculated from ORIGINAL range low, not adjusted entry price
+      request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
+      request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
       request.deviation = 10;
       request.type_filling = ORDER_FILLING_IOC;
 
@@ -556,8 +558,9 @@ void CheckAndReplaceOrders()
          request.magic = InpMagicNumber;
          request.type = ORDER_TYPE_SELL_STOP;
          request.price = NormalizeDouble(sellStopPrice, _Digits);
-         request.sl = NormalizeDouble(sellStopPrice + slDistance, _Digits);
-         request.tp = NormalizeDouble(sellStopPrice - tpDistance, _Digits);
+         // SL and TP calculated from ORIGINAL range low, not adjusted entry price
+         request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
+         request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
@@ -617,8 +620,9 @@ void CheckAndReplaceOrders()
          request.magic = InpMagicNumber;
          request.type = ORDER_TYPE_BUY_STOP;
          request.price = NormalizeDouble(buyStopPrice, _Digits);
-         request.sl = NormalizeDouble(buyStopPrice - slDistance, _Digits);
-         request.tp = NormalizeDouble(buyStopPrice + tpDistance, _Digits);
+         // SL and TP calculated from ORIGINAL range high, not adjusted entry price
+         request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
+         request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
