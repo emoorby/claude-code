@@ -323,29 +323,41 @@ double CalculateLotSize(double stopLossDistance)
       double riskAmount = accountBalance * InpRiskPercent / 100.0;
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-      double stopLossTicks = stopLossDistance / tickSize;
-      lotSize = riskAmount / (stopLossTicks * tickValue);
+      // Calculate money at risk per lot step (matching working EA formula)
+      double moneyPerLotStep = (stopLossDistance / tickSize) * tickValue * lotStep;
+
+      if(moneyPerLotStep == 0)
+      {
+         Print("ERROR: moneyPerLotStep is zero. Cannot calculate lot size.");
+         lotSize = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      }
+      else
+      {
+         lotSize = MathFloor(riskAmount / moneyPerLotStep) * lotStep;
+      }
 
       Print("Lot size calculation: RISK-BASED mode");
       Print("  Account Balance: ", accountBalance);
       Print("  Risk Amount: ", riskAmount, " (", InpRiskPercent, "%)");
       Print("  Tick Size: ", tickSize);
       Print("  Tick Value: ", tickValue);
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossTicks, " ticks)");
+      Print("  Lot Step: ", lotStep);
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/tickSize, " ticks)");
+      Print("  Money Per Lot Step: ", moneyPerLotStep);
       Print("  Calculated Lot Size: ", lotSize);
    }
 
-   // Normalize lot size
+   // Normalize lot size to min/max bounds
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double stepSize = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
    lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
-   lotSize = MathFloor(lotSize / lotStep) * lotStep;
 
    Print("  Normalized Lot Size: ", lotSize, " (Min: ", minLot,
-         " Max: ", maxLot, " Step: ", lotStep, ")");
+         " Max: ", maxLot, " Step: ", stepSize, ")");
 
    return lotSize;
 }
