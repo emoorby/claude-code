@@ -980,9 +980,18 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, int buffer = 1)
    }
 
    // Fallback: use standard ATR
-   double atrValue = iATR(_Symbol, timeframe, InpATRPeriod, 0);
-   if(atrValue > 0)
-      return atrValue;
+   int atrHandle = iATR(_Symbol, timeframe, InpATRPeriod);
+   if(atrHandle != INVALID_HANDLE)
+   {
+      double atrBuffer[1];
+      if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) == 1)
+      {
+         IndicatorRelease(atrHandle);
+         if(atrBuffer[0] > 0)
+            return atrBuffer[0] * InpATRModifier;
+      }
+      IndicatorRelease(atrHandle);
+   }
 
    return 0;
 }
