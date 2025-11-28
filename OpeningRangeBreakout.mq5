@@ -325,8 +325,14 @@ double CalculateLotSize(double stopLossDistance)
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-      // Calculate money at risk per lot step (matching working EA formula)
-      double moneyPerLotStep = (stopLossDistance / tickSize) * tickValue * lotStep;
+      // For indices: Calculate value per point using _Point (not tickSize)
+      // tickSize often reports precision (0.01) not actual min movement (0.1)
+      // pointValue = how much money per point movement per 1.0 lot
+      double pointValue = (tickSize > 0) ? (tickValue * _Point / tickSize) : tickValue;
+
+      // Calculate SL in points and money at risk per lot step
+      double stopLossPoints = stopLossDistance / _Point;
+      double moneyPerLotStep = stopLossPoints * pointValue * lotStep;
 
       if(moneyPerLotStep == 0)
       {
@@ -343,8 +349,10 @@ double CalculateLotSize(double stopLossDistance)
       Print("  Risk Amount: ", riskAmount, " (", InpRiskPercent, "%)");
       Print("  Tick Size: ", tickSize);
       Print("  Tick Value: ", tickValue);
+      Print("  Point Size (_Point): ", _Point);
+      Print("  Point Value (calculated): ", pointValue);
       Print("  Lot Step: ", lotStep);
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/tickSize, " ticks)");
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossPoints, " points)");
       Print("  Money Per Lot Step: ", moneyPerLotStep);
       Print("  Calculated Lot Size: ", lotSize);
    }
