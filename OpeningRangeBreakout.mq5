@@ -50,6 +50,16 @@ input double   InpRiskPercent       = 1.0;    // Risk Percent of Balance
 input group "=== Trade Management ==="
 input int      InpMaxTradesPerDay   = 3;      // Maximum Trades Per Day
 input int      InpMagicNumber       = 123456; // Magic Number
+input string   InpTradeComment      = "ORB";  // Trade Comment
+
+// Advanced Trade Management
+input group "=== Advanced Trade Management ==="
+input double   InpBreakevenPercent     = 50.0;    // Move to Breakeven (% of Range)
+input double   InpPausePercent         = 25.0;    // Pause Before Management (% of Range)
+input double   InpBaselineBalance      = 10000.0; // Baseline Balance
+input double   InpTrailingStopPoints   = 20.0;    // Trailing Stop Distance (Points) - Below Baseline
+input int      InpATRPeriod            = 10;      // ATR Period - At/Above Baseline
+input double   InpATRModifier          = 1.0;     // ATR Modifier - At/Above Baseline
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
@@ -64,6 +74,19 @@ int      g_currentDay = 0;            // Current day for daily reset
 ulong    g_buyStopTicket = 0;         // Buy stop order ticket
 ulong    g_sellStopTicket = 0;        // Sell stop order ticket
 double   g_rangeSize = 0.0;           // Size of the range in price
+
+// Position tracking arrays for trade management
+ulong    g_positionTickets[100];         // Store up to 100 position tickets
+bool     g_breakevenReached[100];        // Breakeven reached flag
+bool     g_nextMoveReached[100];         // Next move (pause) reached flag
+int      g_timeframeLevel[100];          // Current timeframe level for ATR trailing
+double   g_breakevenPrice[100];          // Breakeven price
+double   g_initialSL[100];               // Initial stop loss
+int      g_positionType[100];            // 1 = BUY, 2 = SELL
+int      g_positionCount = 0;            // Number of tracked positions
+
+// ATR Indicator handle
+int      g_atrHandle = INVALID_HANDLE;   // ATR_Trend_Ind indicator handle
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
@@ -88,12 +111,43 @@ int OnInit()
       Print("Risk Percent: ", InpRiskPercent, "%");
    Print("Max Trades Per Day: ", InpMaxTradesPerDay);
    Print("Magic Number: ", InpMagicNumber);
+   Print("Trade Comment: ", InpTradeComment);
+   Print("========================================");
+   Print("Trade Management Settings:");
+   Print("Breakeven Trigger: ", InpBreakevenPercent, "% of range");
+   Print("Pause Before Management: ", InpPausePercent, "% of range");
+   Print("Baseline Balance: ", InpBaselineBalance);
+   Print("Trailing Stop (below baseline): ", InpTrailingStopPoints, " points");
+   Print("ATR Period (at/above baseline): ", InpATRPeriod);
+   Print("ATR Modifier: ", InpATRModifier);
    Print("========================================");
 
    // Initialize current day
    MqlDateTime time_struct;
    TimeCurrent(time_struct);
    g_currentDay = time_struct.day;
+
+   // Initialize position tracking arrays
+   g_positionCount = 0;
+   ArrayInitialize(g_positionTickets, 0);
+   ArrayInitialize(g_breakevenReached, false);
+   ArrayInitialize(g_nextMoveReached, false);
+   ArrayInitialize(g_timeframeLevel, 0);
+   ArrayInitialize(g_breakevenPrice, 0.0);
+   ArrayInitialize(g_initialSL, 0.0);
+   ArrayInitialize(g_positionType, 0);
+
+   // Create ATR_Trend_Ind indicator handle
+   g_atrHandle = iCustom(_Symbol, PERIOD_CURRENT, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   if(g_atrHandle == INVALID_HANDLE)
+   {
+      Print("WARNING: Failed to create ATR_Trend_Ind indicator handle");
+      Print("ATR trade management will use fallback method");
+   }
+   else
+   {
+      Print("ATR_Trend_Ind indicator loaded successfully");
+   }
 
    return(INIT_SUCCEEDED);
 }
@@ -103,6 +157,10 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Release ATR indicator handle
+   if(g_atrHandle != INVALID_HANDLE)
+      IndicatorRelease(g_atrHandle);
+
    Print("========================================");
    Print("Opening Range Breakout EA Deinitialized");
    Print("Reason: ", reason);
@@ -143,6 +201,12 @@ void OnTick()
    if(g_ordersPlaced && g_tradesCount < InpMaxTradesPerDay)
    {
       CheckAndReplaceOrders();
+   }
+
+   // Manage open positions if any exist
+   if(PositionsTotal() > 0)
+   {
+      ManageOpenPositions();
    }
 }
 
@@ -354,6 +418,7 @@ void PlaceStopOrders()
    request.symbol = _Symbol;
    request.volume = lotSize;
    request.magic = InpMagicNumber;
+   request.comment = InpTradeComment;
    request.deviation = 10;
    request.type_filling = ORDER_FILLING_IOC;
 
@@ -410,6 +475,7 @@ void PlaceStopOrders()
       request.symbol = _Symbol;
       request.volume = lotSize;
       request.magic = InpMagicNumber;
+      request.comment = InpTradeComment;
       request.type = ORDER_TYPE_SELL_STOP;
       request.price = NormalizeDouble(sellStopPrice, _Digits);
       // SL and TP calculated from ORIGINAL range low, not adjusted entry price
@@ -556,6 +622,7 @@ void CheckAndReplaceOrders()
          request.symbol = _Symbol;
          request.volume = lotSize;
          request.magic = InpMagicNumber;
+         request.comment = InpTradeComment;
          request.type = ORDER_TYPE_SELL_STOP;
          request.price = NormalizeDouble(sellStopPrice, _Digits);
          // SL and TP calculated from ORIGINAL range low, not adjusted entry price
@@ -618,6 +685,7 @@ void CheckAndReplaceOrders()
          request.symbol = _Symbol;
          request.volume = lotSize;
          request.magic = InpMagicNumber;
+         request.comment = InpTradeComment;
          request.type = ORDER_TYPE_BUY_STOP;
          request.price = NormalizeDouble(buyStopPrice, _Digits);
          // SL and TP calculated from ORIGINAL range high, not adjusted entry price
@@ -705,9 +773,20 @@ void CheckNewDay()
       g_sellStopTicket = 0;
       g_currentDay = time_struct.day;
 
+      // Reset position tracking arrays
+      g_positionCount = 0;
+      ArrayInitialize(g_positionTickets, 0);
+      ArrayInitialize(g_breakevenReached, false);
+      ArrayInitialize(g_nextMoveReached, false);
+      ArrayInitialize(g_timeframeLevel, 0);
+      ArrayInitialize(g_breakevenPrice, 0.0);
+      ArrayInitialize(g_initialSL, 0.0);
+      ArrayInitialize(g_positionType, 0);
+
       Print("Daily reset complete");
       Print("Trade count reset to: 0");
       Print("Range values cleared");
+      Print("Position tracking arrays reset");
       Print("========================================");
    }
 }
@@ -771,6 +850,475 @@ string ErrorDescription(int error_code)
       case 149:  return "Hedging prohibited";
       case 150:  return "Prohibited by FIFO rules";
       default:   return "Unknown error";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update position tracking arrays                                  |
+//+------------------------------------------------------------------+
+void UpdatePositionDataArrays()
+{
+   // Temporary arrays to preserve existing position data
+   ulong tempTickets[100];
+   bool tempBreakevenReached[100];
+   bool tempNextMoveReached[100];
+   int tempTimeframeLevel[100];
+   double tempBreakevenPrice[100];
+   double tempInitialSL[100];
+   int tempType[100];
+   int tempCount = 0;
+
+   // Initialize temporary arrays
+   ArrayInitialize(tempTickets, 0);
+   ArrayInitialize(tempBreakevenReached, false);
+   ArrayInitialize(tempNextMoveReached, false);
+   ArrayInitialize(tempTimeframeLevel, 0);
+   ArrayInitialize(tempBreakevenPrice, 0.0);
+   ArrayInitialize(tempInitialSL, 0.0);
+   ArrayInitialize(tempType, 0);
+
+   // Loop through all open positions
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            int posType = (int)PositionGetInteger(POSITION_TYPE);
+
+            // Check if this position already exists in our array
+            int existingIndex = -1;
+            for(int j = 0; j < g_positionCount; j++)
+            {
+               if(g_positionTickets[j] == ticket)
+               {
+                  existingIndex = j;
+                  break;
+               }
+            }
+
+            // Add to temp array
+            if(tempCount < 100)
+            {
+               tempTickets[tempCount] = ticket;
+
+               // If position already existed, preserve its state
+               if(existingIndex >= 0)
+               {
+                  tempBreakevenReached[tempCount] = g_breakevenReached[existingIndex];
+                  tempNextMoveReached[tempCount] = g_nextMoveReached[existingIndex];
+                  tempTimeframeLevel[tempCount] = g_timeframeLevel[existingIndex];
+                  tempBreakevenPrice[tempCount] = g_breakevenPrice[existingIndex];
+                  tempInitialSL[tempCount] = g_initialSL[existingIndex];
+                  tempType[tempCount] = g_positionType[existingIndex];
+               }
+               else
+               {
+                  // New position - initialize with default values
+                  tempBreakevenReached[tempCount] = false;
+                  tempNextMoveReached[tempCount] = false;
+                  tempTimeframeLevel[tempCount] = 0;
+                  tempBreakevenPrice[tempCount] = 0.0;
+                  tempInitialSL[tempCount] = PositionGetDouble(POSITION_SL);
+                  tempType[tempCount] = (posType == POSITION_TYPE_BUY) ? 1 : 2;
+               }
+
+               tempCount++;
+            }
+         }
+      }
+   }
+
+   // Copy temp arrays back to main arrays
+   g_positionCount = tempCount;
+   for(int k = 0; k < g_positionCount; k++)
+   {
+      g_positionTickets[k] = tempTickets[k];
+      g_breakevenReached[k] = tempBreakevenReached[k];
+      g_nextMoveReached[k] = tempNextMoveReached[k];
+      g_timeframeLevel[k] = tempTimeframeLevel[k];
+      g_breakevenPrice[k] = tempBreakevenPrice[k];
+      g_initialSL[k] = tempInitialSL[k];
+      g_positionType[k] = tempType[k];
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Find position index in tracking arrays                           |
+//+------------------------------------------------------------------+
+int FindPositionIndex(ulong ticket)
+{
+   for(int i = 0; i < g_positionCount; i++)
+   {
+      if(g_positionTickets[i] == ticket)
+         return i;
+   }
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Get ATR Trend Indicator value                                    |
+//+------------------------------------------------------------------+
+double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, int buffer = 1)
+{
+   double atr[];
+   ArraySetAsSeries(atr, true);
+
+   // Try to get values from ATR_Trend_Ind indicator
+   if(g_atrHandle != INVALID_HANDLE)
+   {
+      if(CopyBuffer(g_atrHandle, buffer, 0, 3, atr) > 0)
+      {
+         for(int i = 0; i < 3; i++)
+         {
+            if(atr[i] != 0 && atr[i] != EMPTY_VALUE)
+               return atr[i];
+         }
+      }
+   }
+
+   // Fallback: use standard ATR
+   double atrValue = iATR(_Symbol, timeframe, InpATRPeriod, 0);
+   if(atrValue > 0)
+      return atrValue;
+
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get current timeframe based on level                             |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES GetCurrentTimeframe(int level)
+{
+   switch(level)
+   {
+      case 0: return PERIOD_M5;
+      case 1: return PERIOD_M15;
+      case 2: return PERIOD_M30;
+      case 3: return PERIOD_H1;
+      case 4: return PERIOD_H4;
+      case 5: return PERIOD_D1;
+      default: return PERIOD_M5;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get timeframe level                                              |
+//+------------------------------------------------------------------+
+int GetTimeframeLevel(ENUM_TIMEFRAMES timeframe)
+{
+   switch(timeframe)
+   {
+      case PERIOD_M5: return 0;
+      case PERIOD_M15: return 1;
+      case PERIOD_M30: return 2;
+      case PERIOD_H1: return 3;
+      case PERIOD_H4: return 4;
+      case PERIOD_D1: return 5;
+      default: return 0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get timeframe name                                               |
+//+------------------------------------------------------------------+
+string GetTimeframeName(int level)
+{
+   switch(level)
+   {
+      case 0: return "M5";
+      case 1: return "M15";
+      case 2: return "M30";
+      case 3: return "H1";
+      case 4: return "H4";
+      case 5: return "D1";
+      default: return "Unknown";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Validate SL modification                                         |
+//+------------------------------------------------------------------+
+bool IsValidSLModification(ENUM_POSITION_TYPE posType, double newSL, double currentSL, double currentPrice)
+{
+   newSL = NormalizeDouble(newSL, _Digits);
+   currentSL = NormalizeDouble(currentSL, _Digits);
+   currentPrice = NormalizeDouble(currentPrice, _Digits);
+
+   double minDiff = NormalizeDouble(2 * _Point, _Digits);
+
+   // Check if new SL is different from current SL
+   if(MathAbs(newSL - currentSL) < minDiff)
+      return false;
+
+   // Get minimum stop level
+   long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopLevel = stopLevel * _Point;
+   double tolerance = MathMin(10 * _Point, minStopLevel * 0.5);
+   if(tolerance == 0) tolerance = 10 * _Point;
+
+   // For BUY positions, SL must be below current price
+   if(posType == POSITION_TYPE_BUY)
+   {
+      if(newSL > currentPrice + tolerance)
+         return false;
+
+      double distance = currentPrice - newSL;
+      if(distance < 0) distance = 0;
+
+      if(minStopLevel > 0 && distance < (minStopLevel - tolerance))
+         return false;
+   }
+   // For SELL positions, SL must be above current price
+   else if(posType == POSITION_TYPE_SELL)
+   {
+      if(newSL < currentPrice - tolerance)
+         return false;
+
+      double distance = newSL - currentPrice;
+      if(distance < 0) distance = 0;
+
+      if(minStopLevel > 0 && distance < (minStopLevel - tolerance))
+         return false;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Safe order modify with validation                                |
+//+------------------------------------------------------------------+
+bool SafeOrderModify(ulong ticket, double sl, double tp)
+{
+   if(!PositionSelectByTicket(ticket))
+      return false;
+
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double currentPrice = (posType == POSITION_TYPE_BUY) ?
+                         SymbolInfoDouble(_Symbol, SYMBOL_BID) :
+                         SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   sl = NormalizeDouble(sl, _Digits);
+   tp = NormalizeDouble(tp, _Digits);
+
+   // Validate the modification
+   if(!IsValidSLModification(posType, sl, currentSL, currentPrice))
+      return false;
+
+   MqlTradeRequest request;
+   MqlTradeResult result;
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action = TRADE_ACTION_SLTP;
+   request.position = ticket;
+   request.symbol = _Symbol;
+   request.sl = sl;
+   request.tp = tp;
+
+   if(!OrderSend(request, result))
+   {
+      Print("OrderModify failed for #", ticket, ": Error ", GetLastError());
+      return false;
+   }
+
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("OrderModify failed for #", ticket, ": Retcode ", result.retcode);
+      return false;
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Manage open positions                                            |
+//+------------------------------------------------------------------+
+void ManageOpenPositions()
+{
+   // Update position tracking arrays first
+   UpdatePositionDataArrays();
+
+   // Get current balance
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   bool useBelowBaselineMethod = (currentBalance < InpBaselineBalance);
+
+   Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
+         " (Baseline: ", InpBaselineBalance, ") - Using ",
+         (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
+
+   // Manage each position
+   for(int i = 0; i < g_positionCount; i++)
+   {
+      ulong ticket = g_positionTickets[i];
+      if(PositionSelectByTicket(ticket))
+      {
+         if(g_positionType[i] == 1) // BUY
+            ManageBuyPosition(ticket, i, useBelowBaselineMethod);
+         else if(g_positionType[i] == 2) // SELL
+            ManageSellPosition(ticket, i, useBelowBaselineMethod);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage buy position                                              |
+//+------------------------------------------------------------------+
+void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
+{
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double tp = PositionGetDouble(POSITION_TP);
+
+   double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+   double priceMove = currentPrice - openPrice;
+
+   // Stage 1: Move to breakeven
+   if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+   {
+      double newSL = NormalizeDouble(openPrice, _Digits);
+      if(SafeOrderModify(ticket, newSL, tp))
+      {
+         g_breakevenReached[posIndex] = true;
+         g_breakevenPrice[posIndex] = newSL;
+         Print("BUY #", ticket, " moved to breakeven at ", newSL);
+      }
+      return;
+   }
+
+   // Stage 2: Wait for pause trigger
+   if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
+   {
+      double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+      double additionalMove = priceMove - requiredMoveForBreakeven;
+
+      if(additionalMove >= requiredAdditionalMove)
+      {
+         g_nextMoveReached[posIndex] = true;
+         g_timeframeLevel[posIndex] = 0;
+         Print("BUY #", ticket, " ready for management. Method: ",
+               (useBelowBaselineMethod ? "Trailing Stop" : "ATR"));
+      }
+      return;
+   }
+
+   // Stage 3: Active management
+   if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
+   {
+      if(useBelowBaselineMethod)
+      {
+         // Simple trailing stop
+         double trailingDistance = InpTrailingStopPoints * _Point;
+         double newSL = NormalizeDouble(currentPrice - trailingDistance, _Digits);
+
+         if(newSL > currentSL && newSL > g_breakevenPrice[posIndex])
+         {
+            if(SafeOrderModify(ticket, newSL, tp))
+               Print("BUY #", ticket, " trailing SL updated to ", newSL);
+         }
+      }
+      else
+      {
+         // ATR method
+         ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
+         double atrValue = GetATRTrendIndValue(currentTF, 1);
+
+         if(atrValue > 0 && atrValue > currentSL && atrValue > g_breakevenPrice[posIndex])
+         {
+            double newSL = NormalizeDouble(atrValue, _Digits);
+            if(SafeOrderModify(ticket, newSL, tp))
+            {
+               Print("BUY #", ticket, " ATR SL updated to ", newSL, " (",
+                     GetTimeframeName(g_timeframeLevel[posIndex]), ")");
+
+               if(g_timeframeLevel[posIndex] < 5)
+                  g_timeframeLevel[posIndex]++;
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage sell position                                             |
+//+------------------------------------------------------------------+
+void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
+{
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentSL = PositionGetDouble(POSITION_SL);
+   double tp = PositionGetDouble(POSITION_TP);
+
+   double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+   double priceMove = openPrice - currentPrice;
+
+   // Stage 1: Move to breakeven
+   if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+   {
+      double newSL = NormalizeDouble(openPrice, _Digits);
+      if(SafeOrderModify(ticket, newSL, tp))
+      {
+         g_breakevenReached[posIndex] = true;
+         g_breakevenPrice[posIndex] = newSL;
+         Print("SELL #", ticket, " moved to breakeven at ", newSL);
+      }
+      return;
+   }
+
+   // Stage 2: Wait for pause trigger
+   if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
+   {
+      double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+      double additionalMove = priceMove - requiredMoveForBreakeven;
+
+      if(additionalMove >= requiredAdditionalMove)
+      {
+         g_nextMoveReached[posIndex] = true;
+         g_timeframeLevel[posIndex] = 0;
+         Print("SELL #", ticket, " ready for management. Method: ",
+               (useBelowBaselineMethod ? "Trailing Stop" : "ATR"));
+      }
+      return;
+   }
+
+   // Stage 3: Active management
+   if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
+   {
+      if(useBelowBaselineMethod)
+      {
+         // Simple trailing stop
+         double trailingDistance = InpTrailingStopPoints * _Point;
+         double newSL = NormalizeDouble(currentPrice + trailingDistance, _Digits);
+
+         if(newSL < currentSL && newSL < g_breakevenPrice[posIndex])
+         {
+            if(SafeOrderModify(ticket, newSL, tp))
+               Print("SELL #", ticket, " trailing SL updated to ", newSL);
+         }
+      }
+      else
+      {
+         // ATR method
+         ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
+         double atrValue = GetATRTrendIndValue(currentTF, 1);
+
+         if(atrValue > 0 && atrValue < currentSL && atrValue < g_breakevenPrice[posIndex])
+         {
+            double newSL = NormalizeDouble(atrValue, _Digits);
+            if(SafeOrderModify(ticket, newSL, tp))
+            {
+               Print("SELL #", ticket, " ATR SL updated to ", newSL, " (",
+                     GetTimeframeName(g_timeframeLevel[posIndex]), ")");
+
+               if(g_timeframeLevel[posIndex] < 5)
+                  g_timeframeLevel[posIndex]++;
+            }
+         }
+      }
    }
 }
 //+------------------------------------------------------------------+
