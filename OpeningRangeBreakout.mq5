@@ -88,6 +88,10 @@ int      g_positionCount = 0;            // Number of tracked positions
 // ATR Indicator handle
 int      g_atrHandle = INVALID_HANDLE;   // ATR_Trend_Ind indicator handle
 
+// Management logging flags
+int      g_lastLoggedPositionCount = -1;  // Last logged position count
+bool     g_lastLoggedMethod = false;      // Last logged method (false = trailing, true = ATR)
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                    |
 //+------------------------------------------------------------------+
@@ -783,6 +787,10 @@ void CheckNewDay()
       ArrayInitialize(g_initialSL, 0.0);
       ArrayInitialize(g_positionType, 0);
 
+      // Reset logging flags
+      g_lastLoggedPositionCount = -1;
+      g_lastLoggedMethod = false;
+
       Print("Daily reset complete");
       Print("Trade count reset to: 0");
       Print("Range values cleared");
@@ -1155,9 +1163,15 @@ void ManageOpenPositions()
    double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    bool useBelowBaselineMethod = (currentBalance < InpBaselineBalance);
 
-   Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
-         " (Baseline: ", InpBaselineBalance, ") - Using ",
-         (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
+   // Only log when position count or method changes
+   if(g_positionCount != g_lastLoggedPositionCount || useBelowBaselineMethod != g_lastLoggedMethod)
+   {
+      Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
+            " (Baseline: ", InpBaselineBalance, ") - Using ",
+            (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
+      g_lastLoggedPositionCount = g_positionCount;
+      g_lastLoggedMethod = useBelowBaselineMethod;
+   }
 
    // Manage each position
    for(int i = 0; i < g_positionCount; i++)
