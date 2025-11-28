@@ -88,8 +88,7 @@ int      g_positionCount = 0;            // Number of tracked positions
 // ATR Indicator handle
 int      g_atrHandle = INVALID_HANDLE;   // ATR_Trend_Ind indicator handle
 
-// Management logging flags
-int      g_lastLoggedPositionCount = -1;  // Last logged position count
+// Management logging flag
 bool     g_lastLoggedMethod = false;      // Last logged method (false = trailing, true = ATR)
 
 //+------------------------------------------------------------------+
@@ -787,8 +786,7 @@ void CheckNewDay()
       ArrayInitialize(g_initialSL, 0.0);
       ArrayInitialize(g_positionType, 0);
 
-      // Reset logging flags
-      g_lastLoggedPositionCount = -1;
+      // Reset logging flag
       g_lastLoggedMethod = false;
 
       Print("Daily reset complete");
@@ -1157,19 +1155,25 @@ bool SafeOrderModify(ulong ticket, double sl, double tp)
 void ManageOpenPositions()
 {
    // Update position tracking arrays first
+   int previousPositionCount = g_positionCount;
    UpdatePositionDataArrays();
 
    // Get current balance
    double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    bool useBelowBaselineMethod = (currentBalance < InpBaselineBalance);
 
-   // Only log when position count or method changes
-   if(g_positionCount != g_lastLoggedPositionCount || useBelowBaselineMethod != g_lastLoggedMethod)
+   // Only log when position count actually changes or method changes
+   bool countChanged = (g_positionCount != previousPositionCount);
+   bool methodChanged = (useBelowBaselineMethod != g_lastLoggedMethod);
+
+   if(countChanged || methodChanged)
    {
-      Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
-            " (Baseline: ", InpBaselineBalance, ") - Using ",
-            (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
-      g_lastLoggedPositionCount = g_positionCount;
+      if(g_positionCount > 0)  // Only log if we have positions
+      {
+         Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
+               " (Baseline: ", InpBaselineBalance, ") - Using ",
+               (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
+      }
       g_lastLoggedMethod = useBelowBaselineMethod;
    }
 
