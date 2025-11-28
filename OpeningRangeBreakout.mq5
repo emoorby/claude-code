@@ -330,7 +330,9 @@ double CalculateLotSize(double stopLossDistance)
       Print("Lot size calculation: RISK-BASED mode");
       Print("  Account Balance: ", accountBalance);
       Print("  Risk Amount: ", riskAmount, " (", InpRiskPercent, "%)");
-      Print("  Stop Loss Distance: ", stopLossDistance);
+      Print("  Tick Size: ", tickSize);
+      Print("  Tick Value: ", tickValue);
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossTicks, " ticks)");
       Print("  Calculated Lot Size: ", lotSize);
    }
 
