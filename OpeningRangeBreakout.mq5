@@ -560,8 +560,9 @@ void CheckAndReplaceOrders()
    {
       if(!OrderSelect(g_buyStopTicket))
       {
-         // Order not found in pending orders, check if it was executed
-         if(PositionSelectByTicket(g_buyStopTicket) || IsOrderInHistory(g_buyStopTicket))
+         // Order not found in pending orders, check if it became a position
+         // Only check for active position, NOT history (to avoid false triggers when position closes)
+         if(PositionSelectByTicket(g_buyStopTicket))
          {
             Print("========================================");
             Print("BUY STOP order triggered! Ticket: ", g_buyStopTicket);
@@ -578,8 +579,9 @@ void CheckAndReplaceOrders()
    {
       if(!OrderSelect(g_sellStopTicket))
       {
-         // Order not found in pending orders, check if it was executed
-         if(PositionSelectByTicket(g_sellStopTicket) || IsOrderInHistory(g_sellStopTicket))
+         // Order not found in pending orders, check if it became a position
+         // Only check for active position, NOT history (to avoid false triggers when position closes)
+         if(PositionSelectByTicket(g_sellStopTicket))
          {
             Print("========================================");
             Print("SELL STOP order triggered! Ticket: ", g_sellStopTicket);
@@ -1194,7 +1196,7 @@ void ManageOpenPositions()
       {
          Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
                " (Baseline: ", InpBaselineBalance, ") - Using ",
-               (useBelowBaselineMethod ? "Trailing Stop" : "ATR Method"));
+               (useBelowBaselineMethod ? "ATR M1" : "ATR Multi-Timeframe"));
       }
       g_lastLoggedMethod = useBelowBaselineMethod;
    }
@@ -1250,7 +1252,7 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          g_nextMoveReached[posIndex] = true;
          g_timeframeLevel[posIndex] = 0;
          Print("BUY #", ticket, " ready for management. Method: ",
-               (useBelowBaselineMethod ? "Trailing Stop" : "ATR"));
+               (useBelowBaselineMethod ? "ATR M1" : "ATR Multi-Timeframe"));
       }
       return;
    }
@@ -1260,19 +1262,19 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    {
       if(useBelowBaselineMethod)
       {
-         // Simple trailing stop
-         double trailingDistance = InpTrailingStopPoints * _Point;
-         double newSL = NormalizeDouble(currentPrice - trailingDistance, _Digits);
+         // ATR method on M1 only (below baseline)
+         double atrValue = GetATRTrendIndValue(PERIOD_M1, 1);
 
-         if(newSL > currentSL && newSL > g_breakevenPrice[posIndex])
+         if(atrValue > 0 && atrValue > currentSL && atrValue > g_breakevenPrice[posIndex])
          {
+            double newSL = NormalizeDouble(atrValue, _Digits);
             if(SafeOrderModify(ticket, newSL, tp))
-               Print("BUY #", ticket, " trailing SL updated to ", newSL);
+               Print("BUY #", ticket, " ATR M1 SL updated to ", newSL);
          }
       }
       else
       {
-         // ATR method
+         // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
          double atrValue = GetATRTrendIndValue(currentTF, 1);
 
@@ -1329,7 +1331,7 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          g_nextMoveReached[posIndex] = true;
          g_timeframeLevel[posIndex] = 0;
          Print("SELL #", ticket, " ready for management. Method: ",
-               (useBelowBaselineMethod ? "Trailing Stop" : "ATR"));
+               (useBelowBaselineMethod ? "ATR M1" : "ATR Multi-Timeframe"));
       }
       return;
    }
@@ -1339,19 +1341,19 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    {
       if(useBelowBaselineMethod)
       {
-         // Simple trailing stop
-         double trailingDistance = InpTrailingStopPoints * _Point;
-         double newSL = NormalizeDouble(currentPrice + trailingDistance, _Digits);
+         // ATR method on M1 only (below baseline)
+         double atrValue = GetATRTrendIndValue(PERIOD_M1, 1);
 
-         if(newSL < currentSL && newSL < g_breakevenPrice[posIndex])
+         if(atrValue > 0 && atrValue < currentSL && atrValue < g_breakevenPrice[posIndex])
          {
+            double newSL = NormalizeDouble(atrValue, _Digits);
             if(SafeOrderModify(ticket, newSL, tp))
-               Print("SELL #", ticket, " trailing SL updated to ", newSL);
+               Print("SELL #", ticket, " ATR M1 SL updated to ", newSL);
          }
       }
       else
       {
-         // ATR method
+         // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
          double atrValue = GetATRTrendIndValue(currentTF, 1);
 
