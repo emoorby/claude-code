@@ -319,58 +319,37 @@ double CalculateLotSize(double stopLossDistance)
    }
    else // LOT_RISK_BASED
    {
-      double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      double riskAmount = accountBalance * InpRiskPercent / 100.0;
-      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-      double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      double risk = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPercent / 100.0;
 
-      // Use original formula: calculate based on ticks, not points
-      // This works correctly when tickSize and tickValue are consistently reported
-      double moneyPerLotStep = (stopLossDistance / tickSize) * tickValue * lotStep;
+      double ticksize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double tickvalue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      double lotstep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double minvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double maxvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+      double volumelimit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
 
-      // For IC Markets indices: tickSize and tickValue are reported as precision (0.01)
-      // but actual minimum movement is 10x larger (0.1 with value $0.10)
-      // Detect this condition and apply 10x correction
-      if(tickSize == _Point && tickValue == tickSize && tickSize <= 0.01)
-      {
-         // Likely an index with precision != minimum movement
-         // Apply 10x correction factor
-         moneyPerLotStep = moneyPerLotStep * 10.0;
-         Print("  INDEX DETECTED: Applied 10x correction for minimum price movement");
-      }
+      // Ensure stopLossDistance is positive
+      if(stopLossDistance < 0) stopLossDistance = stopLossDistance * -1;
 
-      if(moneyPerLotStep == 0)
-      {
-         Print("ERROR: moneyPerLotStep is zero. Cannot calculate lot size.");
-         lotSize = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-      }
-      else
-      {
-         lotSize = MathFloor(riskAmount / moneyPerLotStep) * lotStep;
-      }
+      double moneyPerLotstep = stopLossDistance / ticksize * tickvalue * lotstep;
+      lotSize = MathFloor(risk / moneyPerLotstep) * lotstep;
+
+      // Apply volume limits
+      if(volumelimit != 0) lotSize = MathMin(lotSize, volumelimit);
+      if(maxvolume != 0) lotSize = MathMin(lotSize, maxvolume);
+      if(minvolume != 0) lotSize = MathMax(lotSize, minvolume);
+      lotSize = NormalizeDouble(lotSize, 2);
 
       Print("Lot size calculation: RISK-BASED mode");
-      Print("  Account Balance: ", accountBalance);
-      Print("  Risk Amount: ", riskAmount, " (", InpRiskPercent, "%)");
-      Print("  Contract Size: ", contractSize);
-      Print("  Tick Size: ", tickSize);
-      Print("  Tick Value: ", tickValue);
-      Print("  Using broker tick value for calculation");
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/tickSize, " points)");
-      Print("  Calculated Point Value: ", tickValue);
-      Print("  Money Per Standard Lot: ", (stopLossDistance / tickSize) * tickValue);
-      Print("  Calculated Raw Lot Size: ", riskAmount / ((stopLossDistance / tickSize) * tickValue));
-      Print("  Final Lot Size: ", lotSize, " (Min: ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),
-            " Max: ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), " Step: ", lotStep, ")");
+      Print("  Account Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
+      Print("  Risk Amount: ", risk, " (", InpRiskPercent, "%)");
+      Print("  Tick Size: ", ticksize);
+      Print("  Tick Value: ", tickvalue);
+      Print("  Lot Step: ", lotstep);
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/ticksize, " ticks)");
+      Print("  Money Per Lot Step: ", moneyPerLotstep);
+      Print("  Calculated Lot Size: ", lotSize, " (Min: ", minvolume, " Max: ", maxvolume, " Step: ", lotstep, ")");
    }
-
-   // Normalize lot size to min/max bounds
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-
-   lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
 
    return lotSize;
 }
