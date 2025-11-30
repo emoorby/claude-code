@@ -328,17 +328,16 @@ double CalculateLotSize(double stopLossDistance)
       double maxvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
       double volumelimit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
 
-      // For indices: MT5 reports precision (0.01) not actual minimum movement (0.1)
-      // Detect and correct this
+      // For IC Markets indices: MT5 reports tick value incorrectly
+      // IC Markets US500: $1 per 0.01 point (not $0.01 as MT5 reports)
       double effectiveTickSize = ticksize;
       double effectiveTickValue = tickvalue;
 
       if(ticksize == 0.01 && tickvalue == 0.01 && _Point == 0.01)
       {
-         // Index detected: use actual minimum movement
-         effectiveTickSize = 0.1;
-         effectiveTickValue = 0.1;
-         Print("  INDEX DETECTED: Using actual minimum movement 0.1 (not precision 0.01)");
+         // Index detected: IC Markets uses $1 per point (0.01 tick)
+         effectiveTickValue = 1.0;
+         Print("  INDEX DETECTED: IC Markets - Using $1.00 per 0.01 point (not $0.01 as reported)");
       }
 
       // Ensure stopLossDistance is positive
