@@ -330,22 +330,10 @@ double CalculateLotSize(double stopLossDistance)
       double maxvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
       double volumelimit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
 
-      // For IC Markets indices: MT5 reports tick value incorrectly
-      // IC Markets US500: $1 per 0.01 point (not $0.01 as MT5 reports)
-      double effectiveTickSize = ticksize;
-      double effectiveTickValue = tickvalue;
-
-      if(ticksize == 0.01 && tickvalue == 0.01 && _Point == 0.01)
-      {
-         // Index detected: IC Markets uses $1 per point (0.01 tick)
-         effectiveTickValue = 1.0;
-         Print("  INDEX DETECTED: IC Markets - Using $1.00 per 0.01 point (not $0.01 as reported)");
-      }
-
       // Ensure stopLossDistance is positive
       if(stopLossDistance < 0) stopLossDistance = stopLossDistance * -1;
 
-      double moneyPerLotstep = stopLossDistance / effectiveTickSize * effectiveTickValue * lotstep;
+      double moneyPerLotstep = stopLossDistance / ticksize * tickvalue * lotstep;
       lotSize = MathFloor(risk / moneyPerLotstep) * lotstep;
 
       // Apply volume limits
@@ -357,12 +345,10 @@ double CalculateLotSize(double stopLossDistance)
       Print("Lot size calculation: RISK-BASED mode");
       Print("  Account Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
       Print("  Risk Amount: ", risk, " (", InpRiskPercent, "%)");
-      Print("  Tick Size (reported): ", ticksize);
-      Print("  Tick Size (effective): ", effectiveTickSize);
-      Print("  Tick Value (reported): ", tickvalue);
-      Print("  Tick Value (effective): ", effectiveTickValue);
+      Print("  Tick Size: ", ticksize);
+      Print("  Tick Value: ", tickvalue);
       Print("  Lot Step: ", lotstep);
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/effectiveTickSize, " ticks)");
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/ticksize, " ticks)");
       Print("  Money Per Lot Step: ", moneyPerLotstep);
       Print("  Calculated Lot Size: ", lotSize, " (Min: ", minvolume, " Max: ", maxvolume, " Step: ", lotstep, ")");
    }
@@ -787,6 +773,38 @@ void CheckNewDay()
       Print("NEW TRADING DAY DETECTED");
       Print("Previous day: ", g_currentDay, " -> New day: ", time_struct.day);
       Print("Resetting daily values...");
+
+      // Delete any remaining pending orders
+      int deletedCount = 0;
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = OrderGetTicket(i);
+         if(OrderSelect(ticket))
+         {
+            if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
+               OrderGetInteger(ORDER_MAGIC) == InpMagicNumber)
+            {
+               MqlTradeRequest request;
+               MqlTradeResult result;
+               ZeroMemory(request);
+               ZeroMemory(result);
+
+               request.action = TRADE_ACTION_REMOVE;
+               request.order = ticket;
+
+               if(OrderSend(request, result))
+               {
+                  if(result.retcode == TRADE_RETCODE_DONE)
+                  {
+                     deletedCount++;
+                     Print("Deleted pending order #", ticket);
+                  }
+               }
+            }
+         }
+      }
+      if(deletedCount > 0)
+         Print("Deleted ", deletedCount, " pending order(s)");
 
       // Reset all daily tracking variables
       g_rangeHigh = 0.0;
@@ -1257,6 +1275,13 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       {
          g_nextMoveReached[posIndex] = true;
          g_timeframeLevel[posIndex] = 0;
+
+         // Initialize bar time to current bar so we wait for next bar to check ATR
+         if(useBelowBaselineMethod)
+            g_lastBarTime[posIndex] = iTime(_Symbol, PERIOD_M1, 0);
+         else
+            g_lastBarTime[posIndex] = iTime(_Symbol, PERIOD_M5, 0);
+
          Print("BUY #", ticket, " ready for management. Method: ",
                (useBelowBaselineMethod ? "ATR M1" : "ATR Multi-Timeframe"));
       }
@@ -1351,6 +1376,13 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       {
          g_nextMoveReached[posIndex] = true;
          g_timeframeLevel[posIndex] = 0;
+
+         // Initialize bar time to current bar so we wait for next bar to check ATR
+         if(useBelowBaselineMethod)
+            g_lastBarTime[posIndex] = iTime(_Symbol, PERIOD_M1, 0);
+         else
+            g_lastBarTime[posIndex] = iTime(_Symbol, PERIOD_M5, 0);
+
          Print("SELL #", ticket, " ready for management. Method: ",
                (useBelowBaselineMethod ? "ATR M1" : "ATR Multi-Timeframe"));
       }
