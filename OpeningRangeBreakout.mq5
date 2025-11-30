@@ -1333,7 +1333,12 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
                      GetTimeframeName(g_timeframeLevel[posIndex]), ")");
 
                if(g_timeframeLevel[posIndex] < 5)
+               {
                   g_timeframeLevel[posIndex]++;
+                  // Update bar time to new timeframe's current bar
+                  ENUM_TIMEFRAMES newTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
+                  g_lastBarTime[posIndex] = iTime(_Symbol, newTF, 0);
+               }
             }
          }
       }
