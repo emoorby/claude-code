@@ -324,15 +324,22 @@ double CalculateLotSize(double stopLossDistance)
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
 
-      // For indices: Calculate value per point using _Point (not tickSize)
-      // tickSize often reports precision (0.01) not actual min movement (0.1)
-      // pointValue = how much money per point movement per 1.0 lot
-      double pointValue = (tickSize > 0) ? (tickValue * _Point / tickSize) : tickValue;
+      // Use original formula: calculate based on ticks, not points
+      // This works correctly when tickSize and tickValue are consistently reported
+      double moneyPerLotStep = (stopLossDistance / tickSize) * tickValue * lotStep;
 
-      // Calculate SL in points and money at risk per lot step
-      double stopLossPoints = stopLossDistance / _Point;
-      double moneyPerLotStep = stopLossPoints * pointValue * lotStep;
+      // For IC Markets indices: tickSize and tickValue are reported as precision (0.01)
+      // but actual minimum movement is 10x larger (0.1 with value $0.10)
+      // Detect this condition and apply 10x correction
+      if(tickSize == _Point && tickValue == tickSize && tickSize <= 0.01)
+      {
+         // Likely an index with precision != minimum movement
+         // Apply 10x correction factor
+         moneyPerLotStep = moneyPerLotStep * 10.0;
+         Print("  INDEX DETECTED: Applied 10x correction for minimum price movement");
+      }
 
       if(moneyPerLotStep == 0)
       {
@@ -347,25 +354,23 @@ double CalculateLotSize(double stopLossDistance)
       Print("Lot size calculation: RISK-BASED mode");
       Print("  Account Balance: ", accountBalance);
       Print("  Risk Amount: ", riskAmount, " (", InpRiskPercent, "%)");
+      Print("  Contract Size: ", contractSize);
       Print("  Tick Size: ", tickSize);
       Print("  Tick Value: ", tickValue);
-      Print("  Point Size (_Point): ", _Point);
-      Print("  Point Value (calculated): ", pointValue);
-      Print("  Lot Step: ", lotStep);
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossPoints, " points)");
-      Print("  Money Per Lot Step: ", moneyPerLotStep);
-      Print("  Calculated Lot Size: ", lotSize);
+      Print("  Using broker tick value for calculation");
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/tickSize, " points)");
+      Print("  Calculated Point Value: ", tickValue);
+      Print("  Money Per Standard Lot: ", (stopLossDistance / tickSize) * tickValue);
+      Print("  Calculated Raw Lot Size: ", riskAmount / ((stopLossDistance / tickSize) * tickValue));
+      Print("  Final Lot Size: ", lotSize, " (Min: ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),
+            " Max: ", SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX), " Step: ", lotStep, ")");
    }
 
    // Normalize lot size to min/max bounds
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double stepSize = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
    lotSize = MathMax(minLot, MathMin(maxLot, lotSize));
-
-   Print("  Normalized Lot Size: ", lotSize, " (Min: ", minLot,
-         " Max: ", maxLot, " Step: ", stepSize, ")");
 
    return lotSize;
 }
