@@ -328,10 +328,23 @@ double CalculateLotSize(double stopLossDistance)
       double maxvolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
       double volumelimit = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_LIMIT);
 
+      // For indices: MT5 reports precision (0.01) not actual minimum movement (0.1)
+      // Detect and correct this
+      double effectiveTickSize = ticksize;
+      double effectiveTickValue = tickvalue;
+
+      if(ticksize == 0.01 && tickvalue == 0.01 && _Point == 0.01)
+      {
+         // Index detected: use actual minimum movement
+         effectiveTickSize = 0.1;
+         effectiveTickValue = 0.1;
+         Print("  INDEX DETECTED: Using actual minimum movement 0.1 (not precision 0.01)");
+      }
+
       // Ensure stopLossDistance is positive
       if(stopLossDistance < 0) stopLossDistance = stopLossDistance * -1;
 
-      double moneyPerLotstep = stopLossDistance / ticksize * tickvalue * lotstep;
+      double moneyPerLotstep = stopLossDistance / effectiveTickSize * effectiveTickValue * lotstep;
       lotSize = MathFloor(risk / moneyPerLotstep) * lotstep;
 
       // Apply volume limits
@@ -343,10 +356,12 @@ double CalculateLotSize(double stopLossDistance)
       Print("Lot size calculation: RISK-BASED mode");
       Print("  Account Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
       Print("  Risk Amount: ", risk, " (", InpRiskPercent, "%)");
-      Print("  Tick Size: ", ticksize);
-      Print("  Tick Value: ", tickvalue);
+      Print("  Tick Size (reported): ", ticksize);
+      Print("  Tick Size (effective): ", effectiveTickSize);
+      Print("  Tick Value (reported): ", tickvalue);
+      Print("  Tick Value (effective): ", effectiveTickValue);
       Print("  Lot Step: ", lotstep);
-      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/ticksize, " ticks)");
+      Print("  Stop Loss Distance: ", stopLossDistance, " (", stopLossDistance/effectiveTickSize, " ticks)");
       Print("  Money Per Lot Step: ", moneyPerLotstep);
       Print("  Calculated Lot Size: ", lotSize, " (Min: ", minvolume, " Max: ", maxvolume, " Step: ", lotstep, ")");
    }
