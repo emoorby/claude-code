@@ -57,9 +57,8 @@ input group "=== Advanced Trade Management ==="
 input double   InpBreakevenPercent     = 50.0;    // Move to Breakeven (% of Range)
 input double   InpPausePercent         = 25.0;    // Pause Before Management (% of Range)
 input double   InpBaselineBalance      = 10000.0; // Baseline Balance
-input double   InpTrailingStopPoints   = 20.0;    // Trailing Stop Distance (Points) - Below Baseline
-input int      InpATRPeriod            = 10;      // ATR Period - At/Above Baseline
-input double   InpATRModifier          = 1.0;     // ATR Modifier - At/Above Baseline
+input int      InpATRPeriod            = 10;      // ATR Period
+input double   InpATRModifier          = 1.0;     // ATR Modifier
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
@@ -83,6 +82,7 @@ int      g_timeframeLevel[100];          // Current timeframe level for ATR trai
 double   g_breakevenPrice[100];          // Breakeven price
 double   g_initialSL[100];               // Initial stop loss
 int      g_positionType[100];            // 1 = BUY, 2 = SELL
+datetime g_lastBarTime[100];             // Last bar time for each position's timeframe
 int      g_positionCount = 0;            // Number of tracked positions
 
 // ATR Indicator handle
@@ -120,8 +120,9 @@ int OnInit()
    Print("Breakeven Trigger: ", InpBreakevenPercent, "% of range");
    Print("Pause Before Management: ", InpPausePercent, "% of range");
    Print("Baseline Balance: ", InpBaselineBalance);
-   Print("Trailing Stop (below baseline): ", InpTrailingStopPoints, " points");
-   Print("ATR Period (at/above baseline): ", InpATRPeriod);
+   Print("Below Baseline: ATR M1 method");
+   Print("At/Above Baseline: ATR Multi-Timeframe method");
+   Print("ATR Period: ", InpATRPeriod);
    Print("ATR Modifier: ", InpATRModifier);
    Print("========================================");
 
@@ -139,6 +140,7 @@ int OnInit()
    ArrayInitialize(g_breakevenPrice, 0.0);
    ArrayInitialize(g_initialSL, 0.0);
    ArrayInitialize(g_positionType, 0);
+   ArrayInitialize(g_lastBarTime, 0);
 
    // Create ATR_Trend_Ind indicator handle
    g_atrHandle = iCustom(_Symbol, PERIOD_CURRENT, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
@@ -807,6 +809,7 @@ void CheckNewDay()
       ArrayInitialize(g_breakevenPrice, 0.0);
       ArrayInitialize(g_initialSL, 0.0);
       ArrayInitialize(g_positionType, 0);
+      ArrayInitialize(g_lastBarTime, 0);
 
       // Reset logging flag
       g_lastLoggedMethod = false;
@@ -894,6 +897,7 @@ void UpdatePositionDataArrays()
    double tempBreakevenPrice[100];
    double tempInitialSL[100];
    int tempType[100];
+   datetime tempLastBarTime[100];
    int tempCount = 0;
 
    // Initialize temporary arrays
@@ -904,6 +908,7 @@ void UpdatePositionDataArrays()
    ArrayInitialize(tempBreakevenPrice, 0.0);
    ArrayInitialize(tempInitialSL, 0.0);
    ArrayInitialize(tempType, 0);
+   ArrayInitialize(tempLastBarTime, 0);
 
    // Loop through all open positions
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -941,6 +946,7 @@ void UpdatePositionDataArrays()
                   tempBreakevenPrice[tempCount] = g_breakevenPrice[existingIndex];
                   tempInitialSL[tempCount] = g_initialSL[existingIndex];
                   tempType[tempCount] = g_positionType[existingIndex];
+                  tempLastBarTime[tempCount] = g_lastBarTime[existingIndex];
                }
                else
                {
@@ -951,6 +957,7 @@ void UpdatePositionDataArrays()
                   tempBreakevenPrice[tempCount] = 0.0;
                   tempInitialSL[tempCount] = PositionGetDouble(POSITION_SL);
                   tempType[tempCount] = (posType == POSITION_TYPE_BUY) ? 1 : 2;
+                  tempLastBarTime[tempCount] = 0;
                }
 
                tempCount++;
@@ -970,6 +977,7 @@ void UpdatePositionDataArrays()
       g_breakevenPrice[k] = tempBreakevenPrice[k];
       g_initialSL[k] = tempInitialSL[k];
       g_positionType[k] = tempType[k];
+      g_lastBarTime[k] = tempLastBarTime[k];
    }
 }
 
@@ -1261,6 +1269,13 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       if(useBelowBaselineMethod)
       {
          // ATR method on M1 only (below baseline)
+         // Check if new M1 bar has formed
+         datetime currentBarTime = iTime(_Symbol, PERIOD_M1, 0);
+         if(currentBarTime == g_lastBarTime[posIndex])
+            return;  // No new bar yet, skip this tick
+
+         g_lastBarTime[posIndex] = currentBarTime;
+
          double atrValue = GetATRTrendIndValue(PERIOD_M1, 1);
 
          if(atrValue > 0 && atrValue > currentSL && atrValue > g_breakevenPrice[posIndex])
@@ -1274,6 +1289,14 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       {
          // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
+
+         // Check if new bar has formed on current timeframe
+         datetime currentBarTime = iTime(_Symbol, currentTF, 0);
+         if(currentBarTime == g_lastBarTime[posIndex])
+            return;  // No new bar yet, skip this tick
+
+         g_lastBarTime[posIndex] = currentBarTime;
+
          double atrValue = GetATRTrendIndValue(currentTF, 1);
 
          if(atrValue > 0 && atrValue > currentSL && atrValue > g_breakevenPrice[posIndex])
@@ -1340,6 +1363,13 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       if(useBelowBaselineMethod)
       {
          // ATR method on M1 only (below baseline)
+         // Check if new M1 bar has formed
+         datetime currentBarTime = iTime(_Symbol, PERIOD_M1, 0);
+         if(currentBarTime == g_lastBarTime[posIndex])
+            return;  // No new bar yet, skip this tick
+
+         g_lastBarTime[posIndex] = currentBarTime;
+
          double atrValue = GetATRTrendIndValue(PERIOD_M1, 1);
 
          if(atrValue > 0 && atrValue < currentSL && atrValue < g_breakevenPrice[posIndex])
@@ -1353,6 +1383,14 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       {
          // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
+
+         // Check if new bar has formed on current timeframe
+         datetime currentBarTime = iTime(_Symbol, currentTF, 0);
+         if(currentBarTime == g_lastBarTime[posIndex])
+            return;  // No new bar yet, skip this tick
+
+         g_lastBarTime[posIndex] = currentBarTime;
+
          double atrValue = GetATRTrendIndValue(currentTF, 1);
 
          if(atrValue > 0 && atrValue < currentSL && atrValue < g_breakevenPrice[posIndex])
