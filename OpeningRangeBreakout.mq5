@@ -85,8 +85,14 @@ int      g_positionType[100];            // 1 = BUY, 2 = SELL
 datetime g_lastBarTime[100];             // Last bar time for each position's timeframe
 int      g_positionCount = 0;            // Number of tracked positions
 
-// ATR Indicator handle
-int      g_atrHandle = INVALID_HANDLE;   // ATR_Trend_Ind indicator handle
+// ATR Indicator handles for different timeframes
+int      g_atrHandleM1 = INVALID_HANDLE;
+int      g_atrHandleM5 = INVALID_HANDLE;
+int      g_atrHandleM15 = INVALID_HANDLE;
+int      g_atrHandleM30 = INVALID_HANDLE;
+int      g_atrHandleH1 = INVALID_HANDLE;
+int      g_atrHandleH4 = INVALID_HANDLE;
+int      g_atrHandleD1 = INVALID_HANDLE;
 
 // Management logging flag
 bool     g_lastLoggedMethod = false;      // Last logged method (false = trailing, true = ATR)
@@ -142,16 +148,32 @@ int OnInit()
    ArrayInitialize(g_positionType, 0);
    ArrayInitialize(g_lastBarTime, 0);
 
-   // Create ATR_Trend_Ind indicator handle
-   g_atrHandle = iCustom(_Symbol, PERIOD_CURRENT, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
-   if(g_atrHandle == INVALID_HANDLE)
+   // Create ATR_Trend_Ind indicator handles for all timeframes
+   g_atrHandleM1 = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleM5 = iCustom(_Symbol, PERIOD_M5, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleM15 = iCustom(_Symbol, PERIOD_M15, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleM30 = iCustom(_Symbol, PERIOD_M30, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleH1 = iCustom(_Symbol, PERIOD_H1, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleH4 = iCustom(_Symbol, PERIOD_H4, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+   g_atrHandleD1 = iCustom(_Symbol, PERIOD_D1, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
+
+   int failedHandles = 0;
+   if(g_atrHandleM1 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleM5 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleM15 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleM30 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleH1 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleH4 == INVALID_HANDLE) failedHandles++;
+   if(g_atrHandleD1 == INVALID_HANDLE) failedHandles++;
+
+   if(failedHandles > 0)
    {
-      Print("WARNING: Failed to create ATR_Trend_Ind indicator handle");
-      Print("ATR trade management will use fallback method");
+      Print("WARNING: Failed to create ", failedHandles, " ATR_Trend_Ind indicator handle(s)");
+      Print("ATR trade management will use fallback method for failed timeframes");
    }
    else
    {
-      Print("ATR_Trend_Ind indicator loaded successfully");
+      Print("ATR_Trend_Ind indicators loaded successfully for all timeframes");
    }
 
    return(INIT_SUCCEEDED);
@@ -162,9 +184,14 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // Release ATR indicator handle
-   if(g_atrHandle != INVALID_HANDLE)
-      IndicatorRelease(g_atrHandle);
+   // Release all ATR indicator handles
+   if(g_atrHandleM1 != INVALID_HANDLE) IndicatorRelease(g_atrHandleM1);
+   if(g_atrHandleM5 != INVALID_HANDLE) IndicatorRelease(g_atrHandleM5);
+   if(g_atrHandleM15 != INVALID_HANDLE) IndicatorRelease(g_atrHandleM15);
+   if(g_atrHandleM30 != INVALID_HANDLE) IndicatorRelease(g_atrHandleM30);
+   if(g_atrHandleH1 != INVALID_HANDLE) IndicatorRelease(g_atrHandleH1);
+   if(g_atrHandleH4 != INVALID_HANDLE) IndicatorRelease(g_atrHandleH4);
+   if(g_atrHandleD1 != INVALID_HANDLE) IndicatorRelease(g_atrHandleD1);
 
    Print("========================================");
    Print("Opening Range Breakout EA Deinitialized");
@@ -1020,10 +1047,24 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, int buffer = 1)
    double atr[];
    ArraySetAsSeries(atr, true);
 
-   // Try to get values from ATR_Trend_Ind indicator
-   if(g_atrHandle != INVALID_HANDLE)
+   // Select the correct handle based on timeframe
+   int currentHandle = INVALID_HANDLE;
+   switch(timeframe)
    {
-      if(CopyBuffer(g_atrHandle, buffer, 0, 3, atr) > 0)
+      case PERIOD_M1:  currentHandle = g_atrHandleM1;  break;
+      case PERIOD_M5:  currentHandle = g_atrHandleM5;  break;
+      case PERIOD_M15: currentHandle = g_atrHandleM15; break;
+      case PERIOD_M30: currentHandle = g_atrHandleM30; break;
+      case PERIOD_H1:  currentHandle = g_atrHandleH1;  break;
+      case PERIOD_H4:  currentHandle = g_atrHandleH4;  break;
+      case PERIOD_D1:  currentHandle = g_atrHandleD1;  break;
+      default:         currentHandle = INVALID_HANDLE; break;
+   }
+
+   // Try to get values from ATR_Trend_Ind indicator for this timeframe
+   if(currentHandle != INVALID_HANDLE)
+   {
+      if(CopyBuffer(currentHandle, buffer, 0, 3, atr) > 0)
       {
          for(int i = 0; i < 3; i++)
          {
