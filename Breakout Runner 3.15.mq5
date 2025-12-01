@@ -833,6 +833,46 @@ void CheckNewDay()
       if(deletedCount > 0)
          Print("Deleted ", deletedCount, " pending order(s)");
 
+      // PRESERVE STATE OF OPEN POSITIONS before resetting
+      // Save current position states temporarily
+      ulong savedTickets[100];
+      bool savedBreakevenReached[100];
+      bool savedNextMoveReached[100];
+      int savedTimeframeLevel[100];
+      double savedBreakevenPrice[100];
+      double savedInitialSL[100];
+      int savedPositionType[100];
+      datetime savedLastBarTime[100];
+      int savedPositionCount = 0;
+
+      // Copy existing open position states
+      for(int i = 0; i < g_positionCount; i++)
+      {
+         // Check if this position is still open
+         if(PositionSelectByTicket(g_positionTickets[i]))
+         {
+            if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+               PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            {
+               // Position is still open - preserve its state
+               savedTickets[savedPositionCount] = g_positionTickets[i];
+               savedBreakevenReached[savedPositionCount] = g_breakevenReached[i];
+               savedNextMoveReached[savedPositionCount] = g_nextMoveReached[i];
+               savedTimeframeLevel[savedPositionCount] = g_timeframeLevel[i];
+               savedBreakevenPrice[savedPositionCount] = g_breakevenPrice[i];
+               savedInitialSL[savedPositionCount] = g_initialSL[i];
+               savedPositionType[savedPositionCount] = g_positionType[i];
+               savedLastBarTime[savedPositionCount] = g_lastBarTime[i];
+               savedPositionCount++;
+
+               Print("Preserving state for position #", g_positionTickets[i],
+                     " (Timeframe: ", GetTimeframeName(g_timeframeLevel[i]),
+                     ", Breakeven: ", (g_breakevenReached[i] ? "Yes" : "No"),
+                     ", ATR Management: ", (g_nextMoveReached[i] ? "Active" : "Pending"), ")");
+            }
+         }
+      }
+
       // Reset all daily tracking variables
       g_rangeHigh = 0.0;
       g_rangeLow = 0.0;
@@ -856,13 +896,31 @@ void CheckNewDay()
       ArrayInitialize(g_positionType, 0);
       ArrayInitialize(g_lastBarTime, 0);
 
+      // RESTORE PRESERVED POSITION STATES
+      // Restore saved position states back to the arrays
+      for(int i = 0; i < savedPositionCount; i++)
+      {
+         g_positionTickets[i] = savedTickets[i];
+         g_breakevenReached[i] = savedBreakevenReached[i];
+         g_nextMoveReached[i] = savedNextMoveReached[i];
+         g_timeframeLevel[i] = savedTimeframeLevel[i];
+         g_breakevenPrice[i] = savedBreakevenPrice[i];
+         g_initialSL[i] = savedInitialSL[i];
+         g_positionType[i] = savedPositionType[i];
+         g_lastBarTime[i] = savedLastBarTime[i];
+      }
+      g_positionCount = savedPositionCount;
+
       // Reset logging flag
       g_lastLoggedMethod = false;
 
       Print("Daily reset complete");
       Print("Trade count reset to: 0");
       Print("Range values cleared");
-      Print("Position tracking arrays reset");
+      if(savedPositionCount > 0)
+         Print("Position states preserved: ", savedPositionCount, " open position(s) will continue management");
+      else
+         Print("No open positions to preserve");
       Print("========================================");
    }
 }
