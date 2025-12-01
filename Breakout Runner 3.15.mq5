@@ -1064,12 +1064,9 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
    // Try to get values from ATR_Trend_Ind indicator for this timeframe
    if(atrHandle != INVALID_HANDLE)
    {
-      // DEBUG: Check what buffers are available
-      int buffers = IndicatorBuffers(atrHandle);
-
       // Based on typical ATR trailing stop indicators:
       // Try buffer 0 first (most common for main values)
-      for(int buf = 0; buf < MathMin(buffers, 3); buf++)  // Check first 3 buffers
+      for(int buf = 0; buf < 3; buf++)  // Check first 3 buffers
       {
          if(CopyBuffer(atrHandle, buf, 0, 1, value) > 0)
          {
@@ -1098,7 +1095,7 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
       }
 
       // If we didn't find a valid stop price, try all buffers and return the first reasonable price
-      for(int buf = 0; buf < MathMin(buffers, 5); buf++)
+      for(int buf = 0; buf < 5; buf++)
       {
          if(CopyBuffer(atrHandle, buf, 0, 1, value) > 0)
          {
