@@ -83,6 +83,7 @@ double   g_breakevenPrice[100];          // Breakeven price
 double   g_initialSL[100];               // Initial stop loss
 int      g_positionType[100];            // 1 = BUY, 2 = SELL
 datetime g_lastBarTime[100];             // Last bar time for each position's timeframe
+bool     g_useBelowBaselineMethod[100];  // Management method locked at position open (true = M1 only, false = timeframe progression)
 int      g_positionCount = 0;            // Number of tracked positions
 
 // ATR Indicator handles for different timeframes
@@ -147,6 +148,7 @@ int OnInit()
    ArrayInitialize(g_initialSL, 0.0);
    ArrayInitialize(g_positionType, 0);
    ArrayInitialize(g_lastBarTime, 0);
+   ArrayInitialize(g_useBelowBaselineMethod, false);
 
    // Create ATR_Trend_Ind indicator handles for all timeframes
    g_atrHandleM1 = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
@@ -843,6 +845,7 @@ void CheckNewDay()
       double savedInitialSL[100];
       int savedPositionType[100];
       datetime savedLastBarTime[100];
+      bool savedUseBelowBaselineMethod[100];
       int savedPositionCount = 0;
 
       // Copy existing open position states
@@ -863,12 +866,14 @@ void CheckNewDay()
                savedInitialSL[savedPositionCount] = g_initialSL[i];
                savedPositionType[savedPositionCount] = g_positionType[i];
                savedLastBarTime[savedPositionCount] = g_lastBarTime[i];
+               savedUseBelowBaselineMethod[savedPositionCount] = g_useBelowBaselineMethod[i];
                savedPositionCount++;
 
                Print("Preserving state for position #", g_positionTickets[i],
                      " (Timeframe: ", GetTimeframeName(g_timeframeLevel[i]),
                      ", Breakeven: ", (g_breakevenReached[i] ? "Yes" : "No"),
-                     ", ATR Management: ", (g_nextMoveReached[i] ? "Active" : "Pending"), ")");
+                     ", ATR Management: ", (g_nextMoveReached[i] ? "Active" : "Pending"),
+                     ", Method: ", (g_useBelowBaselineMethod[i] ? "M1 Only" : "Timeframe Progression"), ")");
             }
          }
       }
@@ -895,6 +900,7 @@ void CheckNewDay()
       ArrayInitialize(g_initialSL, 0.0);
       ArrayInitialize(g_positionType, 0);
       ArrayInitialize(g_lastBarTime, 0);
+      ArrayInitialize(g_useBelowBaselineMethod, false);
 
       // RESTORE PRESERVED POSITION STATES
       // Restore saved position states back to the arrays
@@ -908,6 +914,7 @@ void CheckNewDay()
          g_initialSL[i] = savedInitialSL[i];
          g_positionType[i] = savedPositionType[i];
          g_lastBarTime[i] = savedLastBarTime[i];
+         g_useBelowBaselineMethod[i] = savedUseBelowBaselineMethod[i];
       }
       g_positionCount = savedPositionCount;
 
@@ -1001,6 +1008,7 @@ void UpdatePositionDataArrays()
    double tempInitialSL[100];
    int tempType[100];
    datetime tempLastBarTime[100];
+   bool tempUseBelowBaselineMethod[100];
    int tempCount = 0;
 
    // Initialize temporary arrays
@@ -1012,6 +1020,7 @@ void UpdatePositionDataArrays()
    ArrayInitialize(tempInitialSL, 0.0);
    ArrayInitialize(tempType, 0);
    ArrayInitialize(tempLastBarTime, 0);
+   ArrayInitialize(tempUseBelowBaselineMethod, false);
 
    // Loop through all open positions
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -1050,10 +1059,15 @@ void UpdatePositionDataArrays()
                   tempInitialSL[tempCount] = g_initialSL[existingIndex];
                   tempType[tempCount] = g_positionType[existingIndex];
                   tempLastBarTime[tempCount] = g_lastBarTime[existingIndex];
+                  tempUseBelowBaselineMethod[tempCount] = g_useBelowBaselineMethod[existingIndex];
                }
                else
                {
                   // New position - initialize with default values
+                  // LOCK IN management method based on CURRENT balance at position opening
+                  double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+                  bool useBelowBaselineMethod = (currentBalance < InpBaselineBalance);
+
                   tempBreakevenReached[tempCount] = false;
                   tempNextMoveReached[tempCount] = false;
                   tempTimeframeLevel[tempCount] = 0;
@@ -1061,6 +1075,11 @@ void UpdatePositionDataArrays()
                   tempInitialSL[tempCount] = PositionGetDouble(POSITION_SL);
                   tempType[tempCount] = (posType == POSITION_TYPE_BUY) ? 1 : 2;
                   tempLastBarTime[tempCount] = 0;
+                  tempUseBelowBaselineMethod[tempCount] = useBelowBaselineMethod;
+
+                  Print("New position #", ticket, " detected. Balance: ", currentBalance,
+                        " | Baseline: ", InpBaselineBalance,
+                        " | Locked Management Method: ", (useBelowBaselineMethod ? "M1 Only" : "Timeframe Progression"));
                }
 
                tempCount++;
@@ -1081,6 +1100,7 @@ void UpdatePositionDataArrays()
       g_initialSL[k] = tempInitialSL[k];
       g_positionType[k] = tempType[k];
       g_lastBarTime[k] = tempLastBarTime[k];
+      g_useBelowBaselineMethod[k] = tempUseBelowBaselineMethod[k];
    }
 }
 
@@ -1374,35 +1394,28 @@ void ManageOpenPositions()
    int previousPositionCount = g_positionCount;
    UpdatePositionDataArrays();
 
-   // Get current balance
-   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   bool useBelowBaselineMethod = (currentBalance < InpBaselineBalance);
-
-   // Only log when position count actually changes or method changes
-   bool countChanged = (g_positionCount != previousPositionCount);
-   bool methodChanged = (useBelowBaselineMethod != g_lastLoggedMethod);
-
-   if(countChanged || methodChanged)
+   // Only log when position count changes
+   if(g_positionCount != previousPositionCount && g_positionCount > 0)
    {
-      if(g_positionCount > 0)  // Only log if we have positions
-      {
-         Print("Managing ", g_positionCount, " positions. Balance: ", currentBalance,
-               " (Baseline: ", InpBaselineBalance, ") - Using ",
-               (useBelowBaselineMethod ? "ATR M1 only" : "ATR Multi-Timeframe progression"));
-      }
-      g_lastLoggedMethod = useBelowBaselineMethod;
+      double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      Print("Managing ", g_positionCount, " positions. Current Balance: ", currentBalance,
+            " (Baseline: ", InpBaselineBalance, ")");
+      Print("Note: Each position uses the management method locked in when it was opened");
    }
 
-   // Manage each position
+   // Manage each position using its LOCKED-IN management method
    for(int i = 0; i < g_positionCount; i++)
    {
       ulong ticket = g_positionTickets[i];
       if(PositionSelectByTicket(ticket))
       {
+         // Use the management method that was locked in when this position was opened
+         bool positionUseBelowBaselineMethod = g_useBelowBaselineMethod[i];
+
          if(g_positionType[i] == 1) // BUY
-            ManageBuyPosition(ticket, i, useBelowBaselineMethod);
+            ManageBuyPosition(ticket, i, positionUseBelowBaselineMethod);
          else if(g_positionType[i] == 2) // SELL
-            ManageSellPosition(ticket, i, useBelowBaselineMethod);
+            ManageSellPosition(ticket, i, positionUseBelowBaselineMethod);
       }
    }
 }
