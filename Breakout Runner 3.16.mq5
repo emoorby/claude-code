@@ -1163,52 +1163,57 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
    // Try to get values from ATR_Trend_Ind indicator for this timeframe
    if(atrHandle != INVALID_HANDLE)
    {
-      // Based on typical ATR trailing stop indicators:
-      // Try buffer 0 first (most common for main values)
-      for(int buf = 0; buf < 3; buf++)  // Check first 3 buffers
+      // ATR_Trend_Ind has 4 buffers:
+      // Buffer 0: ATR_UP_Buffer (arrows, only on trend changes)
+      // Buffer 1: ATR_DN_Buffer (arrows, only on trend changes)
+      // Buffer 2: ATR_UP_Line_Buffer (continuous line - SELL stops, above price)
+      // Buffer 3: ATR_DN_Line_Buffer (continuous line - BUY stops, below price)
+
+      // Select the correct buffer based on position type
+      int targetBuffer = (posType == POSITION_TYPE_BUY) ? 3 : 2;
+
+      // Look back through bars to find the last valid value
+      // The indicator only updates when the value changes, so we need to check multiple bars
+      double values[];
+      ArraySetAsSeries(values, true);
+
+      int lookbackBars = 50;  // Look back up to 50 bars
+      if(CopyBuffer(atrHandle, targetBuffer, 0, lookbackBars, values) > 0)
       {
-         if(CopyBuffer(atrHandle, buf, 0, 1, value) > 0)
+         // Search through bars from most recent to oldest
+         for(int i = 0; i < lookbackBars; i++)
          {
-            if(value[0] > 100 && value[0] < 100000)  // Reasonable price range
+            // Check if value is valid (non-zero and reasonable price range)
+            if(values[i] > 0 && values[i] > 100 && values[i] < 100000)
             {
-               // For BUY positions, the stop should be BELOW current price
-               // For SELL positions, the stop should be ABOVE current price
                double currentPrice = (posType == POSITION_TYPE_BUY) ?
                                      SymbolInfoDouble(_Symbol, SYMBOL_BID) :
                                      SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-               if(posType == POSITION_TYPE_BUY && value[0] < currentPrice)
-               {
-                  // Cache this valid value
-                  g_lastATRValue[posIndex][timeframeLevel] = value[0];
-                  Print("Found & cached BUY stop price ", value[0], " in buffer ", buf, " on ",
-                        GetTimeframeName(timeframeLevel));
-                  return value[0];
-               }
-               else if(posType == POSITION_TYPE_SELL && value[0] > currentPrice)
-               {
-                  // Cache this valid value
-                  g_lastATRValue[posIndex][timeframeLevel] = value[0];
-                  Print("Found & cached SELL stop price ", value[0], " in buffer ", buf, " on ",
-                        GetTimeframeName(timeframeLevel));
-                  return value[0];
-               }
-            }
-         }
-      }
+               // Verify the value makes sense for the position type
+               bool validForBuy = (posType == POSITION_TYPE_BUY && values[i] < currentPrice);
+               bool validForSell = (posType == POSITION_TYPE_SELL && values[i] > currentPrice);
 
-      // If we didn't find a valid stop price, try all buffers and return the first reasonable price
-      for(int buf = 0; buf < 5; buf++)
-      {
-         if(CopyBuffer(atrHandle, buf, 0, 1, value) > 0)
-         {
-            if(value[0] > 100 && value[0] < 100000)  // Reasonable price
-            {
-               // Cache this value
-               g_lastATRValue[posIndex][timeframeLevel] = value[0];
-               Print("Using & caching buffer ", buf, " value ", value[0], " as stop price on ",
-                     GetTimeframeName(timeframeLevel));
-               return value[0];
+               if(validForBuy || validForSell)
+               {
+                  // Cache this valid value
+                  g_lastATRValue[posIndex][timeframeLevel] = values[i];
+
+                  if(i == 0)
+                  {
+                     Print("Found & cached ", (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                           " stop price ", values[i], " in buffer ", targetBuffer, " bar 0 on ",
+                           GetTimeframeName(timeframeLevel));
+                  }
+                  else
+                  {
+                     Print("Found & cached ", (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                           " stop price ", values[i], " in buffer ", targetBuffer, " bar ", i, " (lookback) on ",
+                           GetTimeframeName(timeframeLevel));
+                  }
+
+                  return values[i];
+               }
             }
          }
       }
