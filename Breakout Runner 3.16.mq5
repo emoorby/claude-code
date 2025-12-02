@@ -84,6 +84,7 @@ double   g_initialSL[100];               // Initial stop loss
 int      g_positionType[100];            // 1 = BUY, 2 = SELL
 datetime g_lastBarTime[100];             // Last bar time for each position's timeframe
 bool     g_useBelowBaselineMethod[100];  // Management method locked at position open (true = M1 only, false = timeframe progression)
+double   g_lastATRValue[100][7];         // Cached last valid ATR_Trend_Ind value [position][timeframe_level]
 int      g_positionCount = 0;            // Number of tracked positions
 
 // ATR Indicator handles for different timeframes
@@ -149,6 +150,7 @@ int OnInit()
    ArrayInitialize(g_positionType, 0);
    ArrayInitialize(g_lastBarTime, 0);
    ArrayInitialize(g_useBelowBaselineMethod, false);
+   ArrayInitialize(g_lastATRValue, 0.0);
 
    // Create ATR_Trend_Ind indicator handles for all timeframes
    g_atrHandleM1 = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", InpATRPeriod, InpATRModifier);
@@ -846,6 +848,7 @@ void CheckNewDay()
       int savedPositionType[100];
       datetime savedLastBarTime[100];
       bool savedUseBelowBaselineMethod[100];
+      double savedLastATRValue[100][7];
       int savedPositionCount = 0;
 
       // Copy existing open position states
@@ -867,6 +870,9 @@ void CheckNewDay()
                savedPositionType[savedPositionCount] = g_positionType[i];
                savedLastBarTime[savedPositionCount] = g_lastBarTime[i];
                savedUseBelowBaselineMethod[savedPositionCount] = g_useBelowBaselineMethod[i];
+               // Copy all cached ATR values for all timeframes
+               for(int tf = 0; tf < 7; tf++)
+                  savedLastATRValue[savedPositionCount][tf] = g_lastATRValue[i][tf];
                savedPositionCount++;
 
                Print("Preserving state for position #", g_positionTickets[i],
@@ -901,6 +907,7 @@ void CheckNewDay()
       ArrayInitialize(g_positionType, 0);
       ArrayInitialize(g_lastBarTime, 0);
       ArrayInitialize(g_useBelowBaselineMethod, false);
+      ArrayInitialize(g_lastATRValue, 0.0);
 
       // RESTORE PRESERVED POSITION STATES
       // Restore saved position states back to the arrays
@@ -915,6 +922,9 @@ void CheckNewDay()
          g_positionType[i] = savedPositionType[i];
          g_lastBarTime[i] = savedLastBarTime[i];
          g_useBelowBaselineMethod[i] = savedUseBelowBaselineMethod[i];
+         // Restore all cached ATR values for all timeframes
+         for(int tf = 0; tf < 7; tf++)
+            g_lastATRValue[i][tf] = savedLastATRValue[i][tf];
       }
       g_positionCount = savedPositionCount;
 
@@ -1009,6 +1019,7 @@ void UpdatePositionDataArrays()
    int tempType[100];
    datetime tempLastBarTime[100];
    bool tempUseBelowBaselineMethod[100];
+   double tempLastATRValue[100][7];
    int tempCount = 0;
 
    // Initialize temporary arrays
@@ -1021,6 +1032,7 @@ void UpdatePositionDataArrays()
    ArrayInitialize(tempType, 0);
    ArrayInitialize(tempLastBarTime, 0);
    ArrayInitialize(tempUseBelowBaselineMethod, false);
+   ArrayInitialize(tempLastATRValue, 0.0);
 
    // Loop through all open positions
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -1060,6 +1072,9 @@ void UpdatePositionDataArrays()
                   tempType[tempCount] = g_positionType[existingIndex];
                   tempLastBarTime[tempCount] = g_lastBarTime[existingIndex];
                   tempUseBelowBaselineMethod[tempCount] = g_useBelowBaselineMethod[existingIndex];
+                  // Preserve cached ATR values for all timeframes
+                  for(int tf = 0; tf < 7; tf++)
+                     tempLastATRValue[tempCount][tf] = g_lastATRValue[existingIndex][tf];
                }
                else
                {
@@ -1076,6 +1091,7 @@ void UpdatePositionDataArrays()
                   tempType[tempCount] = (posType == POSITION_TYPE_BUY) ? 1 : 2;
                   tempLastBarTime[tempCount] = 0;
                   tempUseBelowBaselineMethod[tempCount] = useBelowBaselineMethod;
+                  // New position starts with no cached ATR values (already initialized to 0)
 
                   Print("New position #", ticket, " detected. Balance: ", currentBalance,
                         " | Baseline: ", InpBaselineBalance,
@@ -1101,6 +1117,9 @@ void UpdatePositionDataArrays()
       g_positionType[k] = tempType[k];
       g_lastBarTime[k] = tempLastBarTime[k];
       g_useBelowBaselineMethod[k] = tempUseBelowBaselineMethod[k];
+      // Copy cached ATR values for all timeframes
+      for(int tf = 0; tf < 7; tf++)
+         g_lastATRValue[k][tf] = tempLastATRValue[k][tf];
    }
 }
 
@@ -1120,10 +1139,12 @@ int FindPositionIndex(ulong ticket)
 //+------------------------------------------------------------------+
 //| Get ATR Trend Indicator value                                    |
 //+------------------------------------------------------------------+
-double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType)
+double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType, int posIndex)
 {
    double value[];
    ArraySetAsSeries(value, true);
+
+   int timeframeLevel = GetTimeframeLevel(timeframe);
 
    // Select the correct handle based on timeframe
    int atrHandle = INVALID_HANDLE;
@@ -1158,14 +1179,18 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
 
                if(posType == POSITION_TYPE_BUY && value[0] < currentPrice)
                {
-                  Print("Found BUY stop price ", value[0], " in buffer ", buf, " on ",
-                        GetTimeframeName(GetTimeframeLevel(timeframe)));
+                  // Cache this valid value
+                  g_lastATRValue[posIndex][timeframeLevel] = value[0];
+                  Print("Found & cached BUY stop price ", value[0], " in buffer ", buf, " on ",
+                        GetTimeframeName(timeframeLevel));
                   return value[0];
                }
                else if(posType == POSITION_TYPE_SELL && value[0] > currentPrice)
                {
-                  Print("Found SELL stop price ", value[0], " in buffer ", buf, " on ",
-                        GetTimeframeName(GetTimeframeLevel(timeframe)));
+                  // Cache this valid value
+                  g_lastATRValue[posIndex][timeframeLevel] = value[0];
+                  Print("Found & cached SELL stop price ", value[0], " in buffer ", buf, " on ",
+                        GetTimeframeName(timeframeLevel));
                   return value[0];
                }
             }
@@ -1179,19 +1204,29 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
          {
             if(value[0] > 100 && value[0] < 100000)  // Reasonable price
             {
-               Print("Using buffer ", buf, " value ", value[0], " as stop price on ",
-                     GetTimeframeName(GetTimeframeLevel(timeframe)));
+               // Cache this value
+               g_lastATRValue[posIndex][timeframeLevel] = value[0];
+               Print("Using & caching buffer ", buf, " value ", value[0], " as stop price on ",
+                     GetTimeframeName(timeframeLevel));
                return value[0];
             }
          }
       }
 
-      Print("WARNING: No valid price level found in ATR_Trend_Ind buffers on ",
-            GetTimeframeName(GetTimeframeLevel(timeframe)));
+      // No valid value found in indicator - check if we have a cached value
+      if(g_lastATRValue[posIndex][timeframeLevel] > 0)
+      {
+         Print("ATR_Trend_Ind buffer empty, using cached value: ", g_lastATRValue[posIndex][timeframeLevel],
+               " on ", GetTimeframeName(timeframeLevel));
+         return g_lastATRValue[posIndex][timeframeLevel];
+      }
+
+      Print("WARNING: No valid price level found in ATR_Trend_Ind buffers and no cached value on ",
+            GetTimeframeName(timeframeLevel));
    }
    else
    {
-      Print("ERROR: ATR_Trend_Ind handle invalid for ", GetTimeframeName(GetTimeframeLevel(timeframe)));
+      Print("ERROR: ATR_Trend_Ind handle invalid for ", GetTimeframeName(timeframeLevel));
    }
 
    // Fallback: use current price with ATR-based offset
@@ -1484,7 +1519,7 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Update last bar time
          g_lastBarTime[posIndex] = currentBarTime;
 
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_BUY);
+         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_BUY, posIndex);
 
          // Log detailed debug info
          Print("BUY #", ticket, " M1 ATR_Trend_Ind Check | Bar: ", TimeToString(currentBarTime),
@@ -1529,7 +1564,7 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Update last bar time
          g_lastBarTime[posIndex] = currentBarTime;
 
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_BUY);
+         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_BUY, posIndex);
 
          // Log detailed debug info with ATR_Trend_Ind value
          Print("BUY #", ticket, " TF ATR_Trend_Ind Check | Level: ", g_timeframeLevel[posIndex],
@@ -1643,7 +1678,7 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Update last bar time
          g_lastBarTime[posIndex] = currentBarTime;
 
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_SELL);
+         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_SELL, posIndex);
 
          // Log detailed debug info with ATR_Trend_Ind value
          Print("SELL #", ticket, " M1 ATR_Trend_Ind Check | Bar: ", TimeToString(currentBarTime),
@@ -1688,7 +1723,7 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Update last bar time
          g_lastBarTime[posIndex] = currentBarTime;
 
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_SELL);
+         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_SELL, posIndex);
 
          // Log detailed debug info with ATR_Trend_Ind value
          Print("SELL #", ticket, " TF ATR_Trend_Ind Check | Level: ", g_timeframeLevel[posIndex],
