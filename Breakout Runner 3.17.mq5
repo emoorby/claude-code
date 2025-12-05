@@ -65,6 +65,9 @@ input group "=== ATR Volatility Filter ==="
 input bool     InpEnableATRFilter      = false;   // Enable ATR Volatility Filter
 input int      InpATRFilter_RecentCandles  = 2;   // Recent Candles (x)
 input int      InpATRFilter_EarlierCandles = 3;   // Earlier Candles (y)
+input double   InpATRFilter_MinIncreasePercent = 10.0; // Minimum ATR Increase (% of Range)
+input int      InpDirectionalFilter_Candles = 5;  // Directional Candles to Check
+input int      InpDirectionalFilter_MinRequired = 4; // Minimum Directional Candles Required
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
@@ -619,7 +622,9 @@ void CheckAndReplaceOrders()
    // Check ATR filter for triggered orders
    if(buyOrderTriggered || sellOrderTriggered)
    {
-      bool filterPassed = CheckATRFilter();
+      // Determine which order type triggered for filter check
+      ENUM_ORDER_TYPE triggeredType = buyOrderTriggered ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
+      bool filterPassed = CheckATRFilter(triggeredType, g_rangeSize);
 
       if(!filterPassed)
       {
@@ -1219,43 +1224,45 @@ int FindPositionIndex(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| Check ATR Volatility Filter                                      |
-//| Returns true if recent ATR > earlier ATR (trade allowed)         |
-//| Returns false if recent ATR <= earlier ATR (trade rejected)      |
+//| Check ATR Volatility Filter with Directional Momentum            |
+//| Returns true if all conditions pass (trade allowed)              |
+//| Returns false if any condition fails (trade rejected)            |
 //+------------------------------------------------------------------+
-bool CheckATRFilter()
+bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
 {
    if(!InpEnableATRFilter)
       return true;  // Filter disabled, always pass
 
    int recentCandles = InpATRFilter_RecentCandles;
    int earlierCandles = InpATRFilter_EarlierCandles;
+   int directionalCandles = InpDirectionalFilter_Candles;
 
-   // Total bars needed: recent + earlier + 1 (for previous close of first bar)
-   int totalBars = recentCandles + earlierCandles + 1;
+   // Determine max bars needed for both ATR and directional checks
+   int atrBars = recentCandles + earlierCandles + 1;  // +1 for previous close
+   int maxBars = MathMax(atrBars, directionalCandles + 1);
 
-   double high[], low[], close[];
+   double high[], low[], close[], open[];
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
    ArraySetAsSeries(close, true);
+   ArraySetAsSeries(open, true);
 
    // Copy price data starting from bar 1 (not current bar 0)
-   // We need bars 1 to (recentCandles + earlierCandles), plus bar (totalBars) for previous close
-   if(CopyHigh(_Symbol, PERIOD_CURRENT, 1, totalBars, high) <= 0 ||
-      CopyLow(_Symbol, PERIOD_CURRENT, 1, totalBars, low) <= 0 ||
-      CopyClose(_Symbol, PERIOD_CURRENT, 1, totalBars, close) <= 0)
+   if(CopyHigh(_Symbol, PERIOD_CURRENT, 1, maxBars, high) <= 0 ||
+      CopyLow(_Symbol, PERIOD_CURRENT, 1, maxBars, low) <= 0 ||
+      CopyClose(_Symbol, PERIOD_CURRENT, 1, maxBars, close) <= 0 ||
+      CopyOpen(_Symbol, PERIOD_CURRENT, 1, maxBars, open) <= 0)
    {
-      Print("ERROR: Failed to copy price data for ATR filter. Allowing trade by default.");
+      Print("ERROR: Failed to copy price data for filter. Allowing trade by default.");
       return true;
    }
 
+   // ===== PART 1: ATR Volatility Check =====
    // Calculate ATR for recent candles (bars 1 to x)
-   // These are at indices 0 to (recentCandles-1) in the array
    double recentTRSum = 0;
    for(int i = 0; i < recentCandles; i++)
    {
-      // True Range = max(high-low, abs(high-prevClose), abs(low-prevClose))
-      double prevClose = close[i + 1];  // Previous bar's close
+      double prevClose = close[i + 1];
       double tr1 = high[i] - low[i];
       double tr2 = MathAbs(high[i] - prevClose);
       double tr3 = MathAbs(low[i] - prevClose);
@@ -1265,12 +1272,10 @@ bool CheckATRFilter()
    double recentATR = recentTRSum / recentCandles;
 
    // Calculate ATR for earlier candles (bars x+1 to x+y)
-   // These are at indices recentCandles to (recentCandles + earlierCandles - 1)
    double earlierTRSum = 0;
    for(int i = recentCandles; i < recentCandles + earlierCandles; i++)
    {
-      // True Range = max(high-low, abs(high-prevClose), abs(low-prevClose))
-      double prevClose = close[i + 1];  // Previous bar's close
+      double prevClose = close[i + 1];
       double tr1 = high[i] - low[i];
       double tr2 = MathAbs(high[i] - prevClose);
       double tr3 = MathAbs(low[i] - prevClose);
@@ -1279,17 +1284,61 @@ bool CheckATRFilter()
    }
    double earlierATR = earlierTRSum / earlierCandles;
 
-   // Compare: trade allowed only if recent ATR > earlier ATR
-   bool filterPassed = (recentATR > earlierATR);
+   // Check 1: ATR must be increasing
+   bool atrIncreasing = (recentATR > earlierATR);
+   double atrIncrease = recentATR - earlierATR;
 
+   // Check 2: ATR increase must be significant (% of range)
+   double minRequiredIncrease = rangeSize * (InpATRFilter_MinIncreasePercent / 100.0);
+   bool significantIncrease = (atrIncrease >= minRequiredIncrease);
+
+   // ===== PART 2: Directional Momentum Check =====
+   int directionalCount = 0;
+   for(int i = 0; i < directionalCandles; i++)
+   {
+      if(orderType == ORDER_TYPE_BUY_STOP)
+      {
+         // For BUY: count bullish candles (close > open)
+         if(close[i] > open[i])
+            directionalCount++;
+      }
+      else if(orderType == ORDER_TYPE_SELL_STOP)
+      {
+         // For SELL: count bearish candles (close < open)
+         if(close[i] < open[i])
+            directionalCount++;
+      }
+   }
+
+   // Check 3: Enough candles moving in breakout direction
+   bool directionalMomentum = (directionalCount >= InpDirectionalFilter_MinRequired);
+
+   // All three checks must pass
+   bool allChecksPassed = (atrIncreasing && significantIncrease && directionalMomentum);
+
+   // Detailed logging
    Print("========================================");
-   Print("ATR VOLATILITY FILTER CHECK:");
-   Print("  Recent ", recentCandles, " candles (bars 1-", recentCandles, ") ATR: ", DoubleToString(recentATR, _Digits));
-   Print("  Earlier ", earlierCandles, " candles (bars ", recentCandles + 1, "-", recentCandles + earlierCandles, ") ATR: ", DoubleToString(earlierATR, _Digits));
-   Print("  Filter result: ", filterPassed ? "PASSED (trade allowed)" : "FAILED (trade rejected)");
+   Print("VOLATILITY & MOMENTUM FILTER:");
+   Print("Breakout Type: ", (orderType == ORDER_TYPE_BUY_STOP ? "BUY" : "SELL"));
+   Print("");
+   Print("ATR VOLATILITY CHECK:");
+   Print("  Recent ", recentCandles, " candles ATR: ", DoubleToString(recentATR, _Digits));
+   Print("  Earlier ", earlierCandles, " candles ATR: ", DoubleToString(earlierATR, _Digits));
+   Print("  ATR Increase: ", DoubleToString(atrIncrease, _Digits),
+         " | Required: ", DoubleToString(minRequiredIncrease, _Digits));
+   Print("  Check 1 - ATR Increasing: ", atrIncreasing ? "PASS" : "FAIL");
+   Print("  Check 2 - Significant Increase: ", significantIncrease ? "PASS" : "FAIL");
+   Print("");
+   Print("DIRECTIONAL MOMENTUM CHECK:");
+   Print("  ", (orderType == ORDER_TYPE_BUY_STOP ? "Bullish" : "Bearish"), " candles: ",
+         directionalCount, " / ", directionalCandles);
+   Print("  Minimum required: ", InpDirectionalFilter_MinRequired);
+   Print("  Check 3 - Directional Momentum: ", directionalMomentum ? "PASS" : "FAIL");
+   Print("");
+   Print("FINAL RESULT: ", allChecksPassed ? "PASSED - Trade Allowed" : "FAILED - Trade Rejected");
    Print("========================================");
 
-   return filterPassed;
+   return allChecksPassed;
 }
 
 //+------------------------------------------------------------------+
