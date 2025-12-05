@@ -65,7 +65,6 @@ input group "=== ATR Volatility Filter ==="
 input bool     InpEnableATRFilter      = false;   // Enable ATR Volatility Filter
 input int      InpATRFilter_RecentCandles  = 2;   // Recent Candles (x)
 input int      InpATRFilter_EarlierCandles = 3;   // Earlier Candles (y)
-input int      InpATRFilter_Period     = 14;      // ATR Period for Filter
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
@@ -1231,58 +1230,62 @@ bool CheckATRFilter()
 
    int recentCandles = InpATRFilter_RecentCandles;
    int earlierCandles = InpATRFilter_EarlierCandles;
-   int atrPeriod = InpATRFilter_Period;
 
-   // Create temporary ATR handle
-   int atrHandle = iATR(_Symbol, PERIOD_CURRENT, atrPeriod);
-   if(atrHandle == INVALID_HANDLE)
+   // Total bars needed: recent + earlier + 1 (for previous close of first bar)
+   int totalBars = recentCandles + earlierCandles + 1;
+
+   double high[], low[], close[];
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+
+   // Copy price data starting from bar 1 (not current bar 0)
+   // We need bars 1 to (recentCandles + earlierCandles), plus bar (totalBars) for previous close
+   if(CopyHigh(_Symbol, PERIOD_CURRENT, 1, totalBars, high) <= 0 ||
+      CopyLow(_Symbol, PERIOD_CURRENT, 1, totalBars, low) <= 0 ||
+      CopyClose(_Symbol, PERIOD_CURRENT, 1, totalBars, close) <= 0)
    {
-      Print("ERROR: Failed to create ATR handle for filter. Allowing trade by default.");
+      Print("ERROR: Failed to copy price data for ATR filter. Allowing trade by default.");
       return true;
    }
 
-   // Total bars needed: recent + earlier
-   int totalBars = recentCandles + earlierCandles;
-   double atrValues[];
-   ArraySetAsSeries(atrValues, true);
-
-   // Copy ATR values starting from bar 1 (not current bar 0)
-   // We need: bar 1 to bar (totalBars)
-   if(CopyBuffer(atrHandle, 0, 1, totalBars, atrValues) <= 0)
-   {
-      Print("ERROR: Failed to copy ATR buffer for filter. Allowing trade by default.");
-      IndicatorRelease(atrHandle);
-      return true;
-   }
-
-   // Calculate average ATR for recent candles (bars 1 to x)
+   // Calculate ATR for recent candles (bars 1 to x)
    // These are at indices 0 to (recentCandles-1) in the array
-   double recentATRSum = 0;
+   double recentTRSum = 0;
    for(int i = 0; i < recentCandles; i++)
    {
-      recentATRSum += atrValues[i];
+      // True Range = max(high-low, abs(high-prevClose), abs(low-prevClose))
+      double prevClose = close[i + 1];  // Previous bar's close
+      double tr1 = high[i] - low[i];
+      double tr2 = MathAbs(high[i] - prevClose);
+      double tr3 = MathAbs(low[i] - prevClose);
+      double trueRange = MathMax(tr1, MathMax(tr2, tr3));
+      recentTRSum += trueRange;
    }
-   double recentATRAvg = recentATRSum / recentCandles;
+   double recentATR = recentTRSum / recentCandles;
 
-   // Calculate average ATR for earlier candles (bars x+1 to x+y)
+   // Calculate ATR for earlier candles (bars x+1 to x+y)
    // These are at indices recentCandles to (recentCandles + earlierCandles - 1)
-   double earlierATRSum = 0;
+   double earlierTRSum = 0;
    for(int i = recentCandles; i < recentCandles + earlierCandles; i++)
    {
-      earlierATRSum += atrValues[i];
+      // True Range = max(high-low, abs(high-prevClose), abs(low-prevClose))
+      double prevClose = close[i + 1];  // Previous bar's close
+      double tr1 = high[i] - low[i];
+      double tr2 = MathAbs(high[i] - prevClose);
+      double tr3 = MathAbs(low[i] - prevClose);
+      double trueRange = MathMax(tr1, MathMax(tr2, tr3));
+      earlierTRSum += trueRange;
    }
-   double earlierATRAvg = earlierATRSum / earlierCandles;
-
-   // Release the handle
-   IndicatorRelease(atrHandle);
+   double earlierATR = earlierTRSum / earlierCandles;
 
    // Compare: trade allowed only if recent ATR > earlier ATR
-   bool filterPassed = (recentATRAvg > earlierATRAvg);
+   bool filterPassed = (recentATR > earlierATR);
 
    Print("========================================");
    Print("ATR VOLATILITY FILTER CHECK:");
-   Print("  Recent ", recentCandles, " candles ATR average: ", DoubleToString(recentATRAvg, _Digits));
-   Print("  Earlier ", earlierCandles, " candles ATR average: ", DoubleToString(earlierATRAvg, _Digits));
+   Print("  Recent ", recentCandles, " candles (bars 1-", recentCandles, ") ATR: ", DoubleToString(recentATR, _Digits));
+   Print("  Earlier ", earlierCandles, " candles (bars ", recentCandles + 1, "-", recentCandles + earlierCandles, ") ATR: ", DoubleToString(earlierATR, _Digits));
    Print("  Filter result: ", filterPassed ? "PASSED (trade allowed)" : "FAILED (trade rejected)");
    Print("========================================");
 
