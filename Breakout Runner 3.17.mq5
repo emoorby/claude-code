@@ -23,6 +23,17 @@ enum ENUM_LOT_MODE
    LOT_RISK_BASED   // Risk Based on Balance
 };
 
+enum ENUM_MAX_TIMEFRAME
+{
+   MAX_TF_M1,   // M1
+   MAX_TF_M5,   // M5
+   MAX_TF_M15,  // M15
+   MAX_TF_M30,  // M30
+   MAX_TF_H1,   // H1
+   MAX_TF_H4,   // H4
+   MAX_TF_D1    // D1
+};
+
 // Range Time Settings
 input group "=== Range Time Settings ==="
 input int      InpRangeStartHour    = 9;      // Range Start Hour (0-23)
@@ -59,6 +70,7 @@ input double   InpPausePercent         = 25.0;    // Pause Before Management (% 
 input double   InpBaselineBalance      = 10000.0; // Baseline Balance
 input int      InpATRPeriod            = 10;      // ATR Period
 input double   InpATRModifier          = 1.0;     // ATR Modifier
+input ENUM_MAX_TIMEFRAME InpMaxTimeframe = MAX_TF_D1; // Maximum Timeframe for Progression
 
 // ATR Volatility Filter
 input group "=== ATR Volatility Filter ==="
@@ -1537,6 +1549,24 @@ string GetTimeframeName(int level)
 }
 
 //+------------------------------------------------------------------+
+//| Get maximum timeframe level from user input                      |
+//+------------------------------------------------------------------+
+int GetMaxTimeframeLevel()
+{
+   switch(InpMaxTimeframe)
+   {
+      case MAX_TF_M1:  return 0;
+      case MAX_TF_M5:  return 1;
+      case MAX_TF_M15: return 2;
+      case MAX_TF_M30: return 3;
+      case MAX_TF_H1:  return 4;
+      case MAX_TF_H4:  return 5;
+      case MAX_TF_D1:  return 6;
+      default:         return 6;  // Default to D1
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Validate SL modification                                         |
 //+------------------------------------------------------------------+
 bool IsValidSLModification(ENUM_POSITION_TYPE posType, double newSL, double currentSL, double currentPrice)
@@ -1795,13 +1825,19 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
                      GetTimeframeName(g_timeframeLevel[posIndex]), ")");
 
                // Check if we should progress to next timeframe
-               if(g_timeframeLevel[posIndex] < 6)  // Max level is 6 (D1)
+               int maxLevel = GetMaxTimeframeLevel();
+               if(g_timeframeLevel[posIndex] < maxLevel)
                {
                   g_timeframeLevel[posIndex]++;
                   // Reset bar time to 0 to wait for next bar on new timeframe
                   g_lastBarTime[posIndex] = 0;
                   Print("BUY #", ticket, " progressed to ",
                         GetTimeframeName(g_timeframeLevel[posIndex]), " timeframe");
+               }
+               else if(g_timeframeLevel[posIndex] == maxLevel)
+               {
+                  Print("BUY #", ticket, " at maximum timeframe (",
+                        GetTimeframeName(maxLevel), ") - no further progression");
                }
             }
             else
@@ -1954,13 +1990,19 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
                      GetTimeframeName(g_timeframeLevel[posIndex]), ")");
 
                // Check if we should progress to next timeframe
-               if(g_timeframeLevel[posIndex] < 6)  // Max level is 6 (D1)
+               int maxLevel = GetMaxTimeframeLevel();
+               if(g_timeframeLevel[posIndex] < maxLevel)
                {
                   g_timeframeLevel[posIndex]++;
                   // Reset bar time to 0 to wait for next bar on new timeframe
                   g_lastBarTime[posIndex] = 0;
                   Print("SELL #", ticket, " progressed to ",
                         GetTimeframeName(g_timeframeLevel[posIndex]), " timeframe");
+               }
+               else if(g_timeframeLevel[posIndex] == maxLevel)
+               {
+                  Print("SELL #", ticket, " at maximum timeframe (",
+                        GetTimeframeName(maxLevel), ") - no further progression");
                }
             }
             else
