@@ -648,6 +648,7 @@ void CheckAndReplaceOrders()
             request.deviation = 10;
             request.magic = InpMagicNumber;
             request.comment = "ATR Filter Failed";
+            request.type_filling = ORDER_FILLING_RETURN;
 
             if(OrderSend(request, result))
             {
@@ -673,6 +674,7 @@ void CheckAndReplaceOrders()
             request.deviation = 10;
             request.magic = InpMagicNumber;
             request.comment = "ATR Filter Failed";
+            request.type_filling = ORDER_FILLING_RETURN;
 
             if(OrderSend(request, result))
             {
