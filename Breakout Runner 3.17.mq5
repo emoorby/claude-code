@@ -80,7 +80,7 @@ input bool     InpFilter_CheckSignificantIncrease = true; // Check 2: ATR Increa
 input bool     InpFilter_CheckDirectionalMomentum = true; // Check 3: Directional Momentum Required
 input int      InpATRFilter_RecentCandles  = 2;   // Recent Candles (x)
 input int      InpATRFilter_EarlierCandles = 3;   // Earlier Candles (y)
-input double   InpATRFilter_MinIncreasePercent = 10.0; // Minimum ATR Increase (% of Range)
+input double   InpATRFilter_MinIncreasePercent = 20.0; // Minimum ATR Increase (% of Earlier ATR)
 input int      InpDirectionalFilter_Candles = 5;  // Directional Candles to Check
 input int      InpDirectionalFilter_MinRequired = 4; // Minimum Directional Candles Required
 
@@ -1365,9 +1365,9 @@ bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
    double atrIncrease = recentATR - earlierATR;
    bool check1Passed = !check1Enabled || atrIncreasing;  // Pass if disabled or condition met
 
-   // Check 2: ATR increase must be significant (% of range)
+   // Check 2: ATR increase must be significant (% of earlier ATR)
    bool check2Enabled = InpFilter_CheckSignificantIncrease;
-   double minRequiredIncrease = rangeSize * (InpATRFilter_MinIncreasePercent / 100.0);
+   double minRequiredIncrease = earlierATR * (InpATRFilter_MinIncreasePercent / 100.0);
    bool significantIncrease = (atrIncrease >= minRequiredIncrease);
    bool check2Passed = !check2Enabled || significantIncrease;  // Pass if disabled or condition met
 
@@ -1419,7 +1419,8 @@ bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
    Print("  Recent ", recentCandles, " candles ATR: ", DoubleToString(recentATR, _Digits));
    Print("  Earlier ", earlierCandles, " candles ATR: ", DoubleToString(earlierATR, _Digits));
    Print("  ATR Increase: ", DoubleToString(atrIncrease, _Digits),
-         " | Required: ", DoubleToString(minRequiredIncrease, _Digits));
+         " | Required: ", DoubleToString(minRequiredIncrease, _Digits),
+         " (", DoubleToString(InpATRFilter_MinIncreasePercent, 1), "% of Earlier ATR)");
    Print("  Check 1 - ATR Increasing: ",
          check1Enabled ? (atrIncreasing ? "PASS" : "FAIL - Recent ATR NOT > Earlier ATR") : "DISABLED");
    Print("  Check 2 - Significant Increase: ",
