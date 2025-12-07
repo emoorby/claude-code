@@ -75,6 +75,9 @@ input ENUM_MAX_TIMEFRAME InpMaxTimeframe = MAX_TF_D1; // Maximum Timeframe for P
 // ATR Volatility Filter
 input group "=== ATR Volatility Filter ==="
 input bool     InpEnableATRFilter      = false;   // Enable ATR Volatility Filter
+input bool     InpFilter_CheckATRIncreasing = true; // Check 1: ATR Must Be Increasing
+input bool     InpFilter_CheckSignificantIncrease = true; // Check 2: ATR Increase Must Be Significant
+input bool     InpFilter_CheckDirectionalMomentum = true; // Check 3: Directional Momentum Required
 input int      InpATRFilter_RecentCandles  = 2;   // Recent Candles (x)
 input int      InpATRFilter_EarlierCandles = 3;   // Earlier Candles (y)
 input double   InpATRFilter_MinIncreasePercent = 10.0; // Minimum ATR Increase (% of Range)
@@ -1357,14 +1360,19 @@ bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
    double earlierATR = earlierTRSum / earlierCandles;
 
    // Check 1: ATR must be increasing
+   bool check1Enabled = InpFilter_CheckATRIncreasing;
    bool atrIncreasing = (recentATR > earlierATR);
    double atrIncrease = recentATR - earlierATR;
+   bool check1Passed = !check1Enabled || atrIncreasing;  // Pass if disabled or condition met
 
    // Check 2: ATR increase must be significant (% of range)
+   bool check2Enabled = InpFilter_CheckSignificantIncrease;
    double minRequiredIncrease = rangeSize * (InpATRFilter_MinIncreasePercent / 100.0);
    bool significantIncrease = (atrIncrease >= minRequiredIncrease);
+   bool check2Passed = !check2Enabled || significantIncrease;  // Pass if disabled or condition met
 
    // ===== PART 2: Directional Momentum Check =====
+   bool check3Enabled = InpFilter_CheckDirectionalMomentum;
    int directionalCount = 0;
    for(int i = 0; i < directionalCandles; i++)
    {
@@ -1384,9 +1392,23 @@ bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
 
    // Check 3: Enough candles moving in breakout direction
    bool directionalMomentum = (directionalCount >= InpDirectionalFilter_MinRequired);
+   bool check3Passed = !check3Enabled || directionalMomentum;  // Pass if disabled or condition met
 
-   // All three checks must pass
-   bool allChecksPassed = (atrIncreasing && significantIncrease && directionalMomentum);
+   // All ENABLED checks must pass
+   bool allChecksPassed = (check1Passed && check2Passed && check3Passed);
+
+   // Build list of failed checks for logging
+   string failedChecks = "";
+   if(check1Enabled && !atrIncreasing)
+      failedChecks += "Check 1 (ATR Increasing), ";
+   if(check2Enabled && !significantIncrease)
+      failedChecks += "Check 2 (Significant Increase), ";
+   if(check3Enabled && !directionalMomentum)
+      failedChecks += "Check 3 (Directional Momentum), ";
+
+   // Remove trailing comma
+   if(StringLen(failedChecks) > 0)
+      failedChecks = StringSubstr(failedChecks, 0, StringLen(failedChecks) - 2);
 
    // Detailed logging
    Print("========================================");
@@ -1398,16 +1420,28 @@ bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
    Print("  Earlier ", earlierCandles, " candles ATR: ", DoubleToString(earlierATR, _Digits));
    Print("  ATR Increase: ", DoubleToString(atrIncrease, _Digits),
          " | Required: ", DoubleToString(minRequiredIncrease, _Digits));
-   Print("  Check 1 - ATR Increasing: ", atrIncreasing ? "PASS" : "FAIL");
-   Print("  Check 2 - Significant Increase: ", significantIncrease ? "PASS" : "FAIL");
+   Print("  Check 1 - ATR Increasing: ",
+         check1Enabled ? (atrIncreasing ? "PASS" : "FAIL - Recent ATR NOT > Earlier ATR") : "DISABLED");
+   Print("  Check 2 - Significant Increase: ",
+         check2Enabled ? (significantIncrease ? "PASS" : "FAIL - Increase too small") : "DISABLED");
    Print("");
    Print("DIRECTIONAL MOMENTUM CHECK:");
    Print("  ", (orderType == ORDER_TYPE_BUY_STOP ? "Bullish" : "Bearish"), " candles: ",
          directionalCount, " / ", directionalCandles);
    Print("  Minimum required: ", InpDirectionalFilter_MinRequired);
-   Print("  Check 3 - Directional Momentum: ", directionalMomentum ? "PASS" : "FAIL");
+   Print("  Check 3 - Directional Momentum: ",
+         check3Enabled ? (directionalMomentum ? "PASS" : "FAIL - Not enough directional candles") : "DISABLED");
    Print("");
-   Print("FINAL RESULT: ", allChecksPassed ? "PASSED - Trade Allowed" : "FAILED - Trade Rejected");
+
+   if(allChecksPassed)
+   {
+      Print("FINAL RESULT: PASSED - All enabled checks passed");
+   }
+   else
+   {
+      Print("FINAL RESULT: FAILED - Trade Rejected");
+      Print("  Failed checks: ", failedChecks);
+   }
    Print("========================================");
 
    return allChecksPassed;
