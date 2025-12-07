@@ -94,6 +94,7 @@ int      g_currentDay = 0;            // Current day for daily reset
 ulong    g_buyStopTicket = 0;         // Buy stop order ticket
 ulong    g_sellStopTicket = 0;        // Sell stop order ticket
 double   g_rangeSize = 0.0;           // Size of the range in price
+datetime g_lastFilterCheckBarTime = 0; // Last M1 bar time when filter was checked
 
 // Position tracking arrays for trade management
 ulong    g_positionTickets[100];         // Store up to 100 position tickets
@@ -592,16 +593,28 @@ void PlaceStopOrders()
 }
 
 //+------------------------------------------------------------------+
-//| Check pending orders before they trigger and run filter          |
+//| Check pending orders on every M1 bar and run filter              |
 //+------------------------------------------------------------------+
 void CheckPendingOrdersBeforeTrigger()
 {
-   double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // Check on every M1 bar close
+   datetime currentM1BarTime = iTime(_Symbol, PERIOD_M1, 0);
 
-   // Define how close price needs to be to trigger to run the filter
-   // Using a threshold of 5 points
-   double threshold = 5.0 * _Point;
+   // If no new M1 bar has formed, skip the check
+   if(currentM1BarTime == g_lastFilterCheckBarTime)
+      return;
+
+   // New M1 bar - update the time
+   g_lastFilterCheckBarTime = currentM1BarTime;
+
+   // Only run filter if we have pending orders
+   bool hasPendingOrders = (g_buyStopTicket > 0 || g_sellStopTicket > 0);
+   if(!hasPendingOrders)
+      return;
+
+   Print("========================================");
+   Print("M1 Bar Close - Running filter check on pending orders");
+   Print("Bar Time: ", TimeToString(currentM1BarTime));
 
    // Check Buy Stop Order
    if(g_buyStopTicket > 0)
@@ -609,53 +622,45 @@ void CheckPendingOrdersBeforeTrigger()
       if(OrderSelect(g_buyStopTicket))
       {
          double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-         // If ASK is within threshold of buy stop price, run filter
-         if(currentAsk >= (orderPrice - threshold) && currentAsk < orderPrice)
+         Print("Checking BUY STOP #", g_buyStopTicket, " | Order: ", orderPrice, " | ASK: ", currentAsk);
+
+         bool filterPassed = CheckATRFilter(ORDER_TYPE_BUY_STOP, g_rangeSize);
+
+         if(!filterPassed)
          {
-            Print("========================================");
-            Print("BUY STOP about to trigger - Running filter precheck");
-            Print("  Order Price: ", orderPrice, " | Current ASK: ", currentAsk);
+            // Filter failed - delete the pending order
+            Print("Filter FAILED - Deleting BUY STOP order #", g_buyStopTicket);
 
-            bool filterPassed = CheckATRFilter(ORDER_TYPE_BUY_STOP, g_rangeSize);
+            MqlTradeRequest request;
+            MqlTradeResult result;
+            ZeroMemory(request);
+            ZeroMemory(result);
 
-            if(!filterPassed)
+            request.action = TRADE_ACTION_REMOVE;
+            request.order = g_buyStopTicket;
+
+            if(OrderSend(request, result))
             {
-               // Filter failed - delete the pending order
-               Print("Filter FAILED - Deleting BUY STOP order #", g_buyStopTicket);
-
-               MqlTradeRequest request;
-               MqlTradeResult result;
-               ZeroMemory(request);
-               ZeroMemory(result);
-
-               request.action = TRADE_ACTION_REMOVE;
-               request.order = g_buyStopTicket;
-
-               if(OrderSend(request, result))
+               if(result.retcode == TRADE_RETCODE_DONE)
                {
-                  if(result.retcode == TRADE_RETCODE_DONE)
-                  {
-                     Print("BUY STOP order deleted - trade NOT counted towards daily limit");
-                     g_buyStopTicket = 0;
-                  }
-                  else
-                  {
-                     Print("ERROR: Failed to delete BUY STOP order. Return code: ", result.retcode);
-                  }
+                  Print("BUY STOP order deleted - trade NOT counted towards daily limit");
+                  g_buyStopTicket = 0;
                }
                else
                {
-                  Print("ERROR: OrderSend failed to delete BUY STOP: ", GetLastError());
+                  Print("ERROR: Failed to delete BUY STOP order. Return code: ", result.retcode);
                }
-
-               Print("========================================");
             }
             else
             {
-               Print("Filter PASSED - BUY STOP order will be allowed to trigger");
-               Print("========================================");
+               Print("ERROR: OrderSend failed to delete BUY STOP: ", GetLastError());
             }
+         }
+         else
+         {
+            Print("Filter PASSED - BUY STOP order remains active");
          }
       }
    }
@@ -666,56 +671,50 @@ void CheckPendingOrdersBeforeTrigger()
       if(OrderSelect(g_sellStopTicket))
       {
          double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+         double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-         // If BID is within threshold of sell stop price, run filter
-         if(currentBid <= (orderPrice + threshold) && currentBid > orderPrice)
+         Print("Checking SELL STOP #", g_sellStopTicket, " | Order: ", orderPrice, " | BID: ", currentBid);
+
+         bool filterPassed = CheckATRFilter(ORDER_TYPE_SELL_STOP, g_rangeSize);
+
+         if(!filterPassed)
          {
-            Print("========================================");
-            Print("SELL STOP about to trigger - Running filter precheck");
-            Print("  Order Price: ", orderPrice, " | Current BID: ", currentBid);
+            // Filter failed - delete the pending order
+            Print("Filter FAILED - Deleting SELL STOP order #", g_sellStopTicket);
 
-            bool filterPassed = CheckATRFilter(ORDER_TYPE_SELL_STOP, g_rangeSize);
+            MqlTradeRequest request;
+            MqlTradeResult result;
+            ZeroMemory(request);
+            ZeroMemory(result);
 
-            if(!filterPassed)
+            request.action = TRADE_ACTION_REMOVE;
+            request.order = g_sellStopTicket;
+
+            if(OrderSend(request, result))
             {
-               // Filter failed - delete the pending order
-               Print("Filter FAILED - Deleting SELL STOP order #", g_sellStopTicket);
-
-               MqlTradeRequest request;
-               MqlTradeResult result;
-               ZeroMemory(request);
-               ZeroMemory(result);
-
-               request.action = TRADE_ACTION_REMOVE;
-               request.order = g_sellStopTicket;
-
-               if(OrderSend(request, result))
+               if(result.retcode == TRADE_RETCODE_DONE)
                {
-                  if(result.retcode == TRADE_RETCODE_DONE)
-                  {
-                     Print("SELL STOP order deleted - trade NOT counted towards daily limit");
-                     g_sellStopTicket = 0;
-                  }
-                  else
-                  {
-                     Print("ERROR: Failed to delete SELL STOP order. Return code: ", result.retcode);
-                  }
+                  Print("SELL STOP order deleted - trade NOT counted towards daily limit");
+                  g_sellStopTicket = 0;
                }
                else
                {
-                  Print("ERROR: OrderSend failed to delete SELL STOP: ", GetLastError());
+                  Print("ERROR: Failed to delete SELL STOP order. Return code: ", result.retcode);
                }
-
-               Print("========================================");
             }
             else
             {
-               Print("Filter PASSED - SELL STOP order will be allowed to trigger");
-               Print("========================================");
+               Print("ERROR: OrderSend failed to delete SELL STOP: ", GetLastError());
             }
+         }
+         else
+         {
+            Print("Filter PASSED - SELL STOP order remains active");
          }
       }
    }
+
+   Print("========================================");
 }
 
 //+------------------------------------------------------------------+
@@ -1053,6 +1052,7 @@ void CheckNewDay()
       g_tradesCount = 0;
       g_buyStopTicket = 0;
       g_sellStopTicket = 0;
+      g_lastFilterCheckBarTime = 0;
       g_currentDay = time_struct.day;
 
       // Reset position tracking arrays
