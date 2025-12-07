@@ -254,6 +254,12 @@ void OnTick()
       PlaceStopOrders();
    }
 
+   // Check pending orders and run filter before they trigger
+   if(g_ordersPlaced && InpEnableATRFilter)
+   {
+      CheckPendingOrdersBeforeTrigger();
+   }
+
    // Check if any orders were triggered and need replacement
    if(g_ordersPlaced && g_tradesCount < InpMaxTradesPerDay)
    {
@@ -586,14 +592,139 @@ void PlaceStopOrders()
 }
 
 //+------------------------------------------------------------------+
+//| Check pending orders before they trigger and run filter          |
+//+------------------------------------------------------------------+
+void CheckPendingOrdersBeforeTrigger()
+{
+   double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   // Define how close price needs to be to trigger to run the filter
+   // Using a threshold of 5 points
+   double threshold = 5.0 * _Point;
+
+   // Check Buy Stop Order
+   if(g_buyStopTicket > 0)
+   {
+      if(OrderSelect(g_buyStopTicket))
+      {
+         double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+
+         // If ASK is within threshold of buy stop price, run filter
+         if(currentAsk >= (orderPrice - threshold) && currentAsk < orderPrice)
+         {
+            Print("========================================");
+            Print("BUY STOP about to trigger - Running filter precheck");
+            Print("  Order Price: ", orderPrice, " | Current ASK: ", currentAsk);
+
+            bool filterPassed = CheckATRFilter(ORDER_TYPE_BUY_STOP, g_rangeSize);
+
+            if(!filterPassed)
+            {
+               // Filter failed - delete the pending order
+               Print("Filter FAILED - Deleting BUY STOP order #", g_buyStopTicket);
+
+               MqlTradeRequest request;
+               MqlTradeResult result;
+               ZeroMemory(request);
+               ZeroMemory(result);
+
+               request.action = TRADE_ACTION_REMOVE;
+               request.order = g_buyStopTicket;
+
+               if(OrderSend(request, result))
+               {
+                  if(result.retcode == TRADE_RETCODE_DONE)
+                  {
+                     Print("BUY STOP order deleted - trade NOT counted towards daily limit");
+                     g_buyStopTicket = 0;
+                  }
+                  else
+                  {
+                     Print("ERROR: Failed to delete BUY STOP order. Return code: ", result.retcode);
+                  }
+               }
+               else
+               {
+                  Print("ERROR: OrderSend failed to delete BUY STOP: ", GetLastError());
+               }
+
+               Print("========================================");
+            }
+            else
+            {
+               Print("Filter PASSED - BUY STOP order will be allowed to trigger");
+               Print("========================================");
+            }
+         }
+      }
+   }
+
+   // Check Sell Stop Order
+   if(g_sellStopTicket > 0)
+   {
+      if(OrderSelect(g_sellStopTicket))
+      {
+         double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
+
+         // If BID is within threshold of sell stop price, run filter
+         if(currentBid <= (orderPrice + threshold) && currentBid > orderPrice)
+         {
+            Print("========================================");
+            Print("SELL STOP about to trigger - Running filter precheck");
+            Print("  Order Price: ", orderPrice, " | Current BID: ", currentBid);
+
+            bool filterPassed = CheckATRFilter(ORDER_TYPE_SELL_STOP, g_rangeSize);
+
+            if(!filterPassed)
+            {
+               // Filter failed - delete the pending order
+               Print("Filter FAILED - Deleting SELL STOP order #", g_sellStopTicket);
+
+               MqlTradeRequest request;
+               MqlTradeResult result;
+               ZeroMemory(request);
+               ZeroMemory(result);
+
+               request.action = TRADE_ACTION_REMOVE;
+               request.order = g_sellStopTicket;
+
+               if(OrderSend(request, result))
+               {
+                  if(result.retcode == TRADE_RETCODE_DONE)
+                  {
+                     Print("SELL STOP order deleted - trade NOT counted towards daily limit");
+                     g_sellStopTicket = 0;
+                  }
+                  else
+                  {
+                     Print("ERROR: Failed to delete SELL STOP order. Return code: ", result.retcode);
+                  }
+               }
+               else
+               {
+                  Print("ERROR: OrderSend failed to delete SELL STOP: ", GetLastError());
+               }
+
+               Print("========================================");
+            }
+            else
+            {
+               Print("Filter PASSED - SELL STOP order will be allowed to trigger");
+               Print("========================================");
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Check if orders were triggered and replace them                  |
 //+------------------------------------------------------------------+
 void CheckAndReplaceOrders()
 {
    bool buyOrderTriggered = false;
    bool sellOrderTriggered = false;
-   ulong triggeredBuyTicket = 0;
-   ulong triggeredSellTicket = 0;
 
    // Check Buy Stop Order
    if(g_buyStopTicket > 0)
@@ -607,7 +738,6 @@ void CheckAndReplaceOrders()
             Print("========================================");
             Print("BUY STOP order triggered! Ticket: ", g_buyStopTicket);
             buyOrderTriggered = true;
-            triggeredBuyTicket = g_buyStopTicket;
             g_buyStopTicket = 0;
          }
       }
@@ -625,90 +755,18 @@ void CheckAndReplaceOrders()
             Print("========================================");
             Print("SELL STOP order triggered! Ticket: ", g_sellStopTicket);
             sellOrderTriggered = true;
-            triggeredSellTicket = g_sellStopTicket;
             g_sellStopTicket = 0;
          }
       }
    }
 
-   // Check ATR filter for triggered orders
+   // Increment trade count for triggered orders
+   // Note: Filter is now checked BEFORE orders trigger (see CheckPendingOrdersBeforeTrigger)
+   // so any order that triggers has already passed the filter
    if(buyOrderTriggered || sellOrderTriggered)
    {
-      // Determine which order type triggered for filter check
-      ENUM_ORDER_TYPE triggeredType = buyOrderTriggered ? ORDER_TYPE_BUY_STOP : ORDER_TYPE_SELL_STOP;
-      bool filterPassed = CheckATRFilter(triggeredType, g_rangeSize);
-
-      if(!filterPassed)
-      {
-         // Filter failed - close the triggered position immediately
-         Print("ATR Filter FAILED - Closing triggered position immediately");
-
-         MqlTradeRequest request;
-         MqlTradeResult result;
-
-         if(buyOrderTriggered && PositionSelectByTicket(triggeredBuyTicket))
-         {
-            ZeroMemory(request);
-            ZeroMemory(result);
-
-            request.action = TRADE_ACTION_DEAL;
-            request.symbol = _Symbol;
-            request.volume = PositionGetDouble(POSITION_VOLUME);
-            request.type = ORDER_TYPE_SELL;  // Close BUY with SELL
-            request.position = triggeredBuyTicket;
-            request.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-            request.deviation = 10;
-            request.magic = InpMagicNumber;
-            request.comment = "ATR Filter Failed";
-            request.type_filling = ORDER_FILLING_RETURN;
-
-            if(OrderSend(request, result))
-            {
-               Print("BUY position #", triggeredBuyTicket, " closed due to ATR filter failure");
-            }
-            else
-            {
-               Print("ERROR: Failed to close BUY position #", triggeredBuyTicket, ": ", GetLastError());
-            }
-         }
-
-         if(sellOrderTriggered && PositionSelectByTicket(triggeredSellTicket))
-         {
-            ZeroMemory(request);
-            ZeroMemory(result);
-
-            request.action = TRADE_ACTION_DEAL;
-            request.symbol = _Symbol;
-            request.volume = PositionGetDouble(POSITION_VOLUME);
-            request.type = ORDER_TYPE_BUY;  // Close SELL with BUY
-            request.position = triggeredSellTicket;
-            request.price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-            request.deviation = 10;
-            request.magic = InpMagicNumber;
-            request.comment = "ATR Filter Failed";
-            request.type_filling = ORDER_FILLING_RETURN;
-
-            if(OrderSend(request, result))
-            {
-               Print("SELL position #", triggeredSellTicket, " closed due to ATR filter failure");
-            }
-            else
-            {
-               Print("ERROR: Failed to close SELL position #", triggeredSellTicket, ": ", GetLastError());
-            }
-         }
-
-         Print("Position closed - trade NOT counted towards daily limit");
-         Print("========================================");
-         return;  // Exit without counting trade or replacing orders
-      }
-      else
-      {
-         // Filter passed - increment trade count and proceed normally
-         g_tradesCount++;
-         Print("ATR Filter PASSED - Trade allowed");
-         Print("Trade count increased to: ", g_tradesCount, "/", InpMaxTradesPerDay);
-      }
+      g_tradesCount++;
+      Print("Trade count increased to: ", g_tradesCount, "/", InpMaxTradesPerDay);
    }
 
    // Replace triggered orders if trade limit not reached
