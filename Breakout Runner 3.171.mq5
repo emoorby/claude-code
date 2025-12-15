@@ -75,10 +75,10 @@ input group "=== ATR_Trend_Ind Settings (Above Baseline) ==="
 input int      InpATRPeriod_AboveBaseline    = 10;   // ATR Period (Above Baseline)
 input double   InpATRModifier_AboveBaseline  = 1.0;  // ATR Modifier (Above Baseline)
 
-// ATR_Trend_Ind Settings - Below Baseline
-input group "=== ATR_Trend_Ind Settings (Below Baseline) ==="
-input int      InpATRPeriod_BelowBaseline    = 10;   // ATR Period (Below Baseline)
-input double   InpATRModifier_BelowBaseline  = 1.0;  // ATR Modifier (Below Baseline)
+// Points-Based Trailing - Below Baseline
+input group "=== Points-Based Trailing (Below Baseline) ==="
+input int      InpBelowBaseline_BreakevenPoints = 50;   // Breakeven Trigger (Points)
+input int      InpBelowBaseline_TrailingPoints  = 25;   // Trailing Stop Distance (Points)
 
 // ATR Volatility Filter
 input group "=== ATR Volatility Filter ==="
@@ -167,12 +167,13 @@ int OnInit()
    Print("Trade Comment: ", InpTradeComment);
    Print("========================================");
    Print("Trade Management Settings:");
-   Print("Breakeven Trigger: ", InpBreakevenPercent, "% of range");
-   Print("Pause Before Management: ", InpPausePercent, "% of range");
    Print("Baseline Balance: ", InpBaselineBalance);
-   Print("Below Baseline: ATR M1 method");
-   Print("  ATR Period: ", InpATRPeriod_BelowBaseline, " | ATR Modifier: ", InpATRModifier_BelowBaseline);
+   Print("Below Baseline: Points-Based Trailing");
+   Print("  Breakeven Trigger: ", InpBelowBaseline_BreakevenPoints, " points");
+   Print("  Trailing Stop: ", InpBelowBaseline_TrailingPoints, " points");
    Print("At/Above Baseline: ATR Multi-Timeframe method");
+   Print("  Breakeven Trigger: ", InpBreakevenPercent, "% of range");
+   Print("  Pause Before Trailing: ", InpPausePercent, "% of range");
    Print("  ATR Period: ", InpATRPeriod_AboveBaseline, " | ATR Modifier: ", InpATRModifier_AboveBaseline);
    Print("========================================");
 
@@ -194,7 +195,8 @@ int OnInit()
    ArrayInitialize(g_useBelowBaselineMethod, false);
    ArrayInitialize(g_lastATRValue, 0.0);
 
-   // Create ATR_Trend_Ind indicator handles for all timeframes - Above Baseline
+   // Create ATR_Trend_Ind indicator handles for all timeframes - Above Baseline only
+   // Below Baseline uses points-based trailing, so no indicators needed
    g_atrHandleM1_Above = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
    g_atrHandleM5_Above = iCustom(_Symbol, PERIOD_M5, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
    g_atrHandleM15_Above = iCustom(_Symbol, PERIOD_M15, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
@@ -202,15 +204,6 @@ int OnInit()
    g_atrHandleH1_Above = iCustom(_Symbol, PERIOD_H1, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
    g_atrHandleH4_Above = iCustom(_Symbol, PERIOD_H4, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
    g_atrHandleD1_Above = iCustom(_Symbol, PERIOD_D1, "ATR_Trend_Ind", InpATRPeriod_AboveBaseline, InpATRModifier_AboveBaseline);
-
-   // Create ATR_Trend_Ind indicator handles for all timeframes - Below Baseline
-   g_atrHandleM1_Below = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleM5_Below = iCustom(_Symbol, PERIOD_M5, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleM15_Below = iCustom(_Symbol, PERIOD_M15, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleM30_Below = iCustom(_Symbol, PERIOD_M30, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleH1_Below = iCustom(_Symbol, PERIOD_H1, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleH4_Below = iCustom(_Symbol, PERIOD_H4, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
-   g_atrHandleD1_Below = iCustom(_Symbol, PERIOD_D1, "ATR_Trend_Ind", InpATRPeriod_BelowBaseline, InpATRModifier_BelowBaseline);
 
    int failedHandles = 0;
    if(g_atrHandleM1_Above == INVALID_HANDLE) failedHandles++;
@@ -220,13 +213,6 @@ int OnInit()
    if(g_atrHandleH1_Above == INVALID_HANDLE) failedHandles++;
    if(g_atrHandleH4_Above == INVALID_HANDLE) failedHandles++;
    if(g_atrHandleD1_Above == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleM1_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleM5_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleM15_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleM30_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleH1_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleH4_Below == INVALID_HANDLE) failedHandles++;
-   if(g_atrHandleD1_Below == INVALID_HANDLE) failedHandles++;
 
    if(failedHandles > 0)
    {
@@ -235,7 +221,7 @@ int OnInit()
    }
    else
    {
-      Print("ATR_Trend_Ind indicators loaded successfully for all timeframes (Above & Below Baseline)");
+      Print("ATR_Trend_Ind indicators loaded successfully for Above Baseline management");
    }
 
    return(INIT_SUCCEEDED);
@@ -246,7 +232,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // Release all ATR indicator handles - Above Baseline
+   // Release ATR indicator handles - Above Baseline only
    if(g_atrHandleM1_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleM1_Above);
    if(g_atrHandleM5_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleM5_Above);
    if(g_atrHandleM15_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleM15_Above);
@@ -254,15 +240,6 @@ void OnDeinit(const int reason)
    if(g_atrHandleH1_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleH1_Above);
    if(g_atrHandleH4_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleH4_Above);
    if(g_atrHandleD1_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleD1_Above);
-
-   // Release all ATR indicator handles - Below Baseline
-   if(g_atrHandleM1_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleM1_Below);
-   if(g_atrHandleM5_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleM5_Below);
-   if(g_atrHandleM15_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleM15_Below);
-   if(g_atrHandleM30_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleM30_Below);
-   if(g_atrHandleH1_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleH1_Below);
-   if(g_atrHandleH4_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleH4_Below);
-   if(g_atrHandleD1_Below != INVALID_HANDLE) IndicatorRelease(g_atrHandleD1_Below);
 
    Print("========================================");
    Print("Opening Range Breakout EA Deinitialized");
@@ -1869,91 +1846,81 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    double currentSL = PositionGetDouble(POSITION_SL);
    double tp = PositionGetDouble(POSITION_TP);
 
-   double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
-   double priceMove = currentPrice - openPrice;
-
-   // Stage 1: Move to breakeven
-   if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+   if(useBelowBaselineMethod)
    {
-      double newSL = NormalizeDouble(openPrice, _Digits);
-      if(SafeOrderModify(ticket, newSL, tp))
+      // Below Baseline: Points-Based Trailing
+      double priceMove = currentPrice - openPrice;
+      double priceMovePoints = priceMove / _Point;
+
+      // Stage 1: Move to breakeven when price moves specified points
+      if(!g_breakevenReached[posIndex] && priceMovePoints >= InpBelowBaseline_BreakevenPoints)
       {
-         g_breakevenReached[posIndex] = true;
-         g_breakevenPrice[posIndex] = newSL;
-         Print("BUY #", ticket, " moved to breakeven at ", newSL);
-      }
-      return;
-   }
-
-   // Stage 2: Wait for pause trigger
-   if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
-   {
-      double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
-      double additionalMove = priceMove - requiredMoveForBreakeven;
-
-      if(additionalMove >= requiredAdditionalMove)
-      {
-         g_nextMoveReached[posIndex] = true;
-         g_timeframeLevel[posIndex] = 0;  // Start with M1
-
-         // Initialize bar time to 0 so it will process on next tick
-         g_lastBarTime[posIndex] = 0;
-
-         Print("BUY #", ticket, " ready for ATR management. Method: ",
-               (useBelowBaselineMethod ? "ATR M1 only" : "ATR Multi-Timeframe progression"));
-      }
-      return;
-   }
-
-   // Stage 3: Active management
-   if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
-   {
-      if(useBelowBaselineMethod)
-      {
-         // ATR method on M1 only (below baseline)
-         ENUM_TIMEFRAMES currentTF = PERIOD_M1;
-
-         // Check if new bar has formed on M1
-         datetime currentBarTime = iTime(_Symbol, currentTF, 0);
-
-         // If lastBarTime is 0 (initial state) or different from current, we have a new bar
-         if(g_lastBarTime[posIndex] != 0 && currentBarTime == g_lastBarTime[posIndex])
-            return;  // No new bar yet, skip this tick
-
-         // Update last bar time
-         g_lastBarTime[posIndex] = currentBarTime;
-
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_BUY, posIndex);
-
-         // Log detailed debug info
-         Print("BUY #", ticket, " M1 ATR_Trend_Ind Check | Bar: ", TimeToString(currentBarTime),
-               " | ATR_Trend_Ind Stop Price: ", atrStopPrice, " | Current SL: ", currentSL,
-               " | Breakeven: ", g_breakevenPrice[posIndex],
-               " | Price: ", currentPrice, " | Open: ", openPrice);
-
-         if(atrStopPrice > 0 && atrStopPrice > currentSL && atrStopPrice > g_breakevenPrice[posIndex])
+         double newSL = NormalizeDouble(openPrice, _Digits);
+         if(SafeOrderModify(ticket, newSL, tp))
          {
-            double newSL = NormalizeDouble(atrStopPrice, _Digits);
+            g_breakevenReached[posIndex] = true;
+            g_breakevenPrice[posIndex] = newSL;
+            Print("BUY #", ticket, " moved to breakeven at ", newSL, " (", priceMovePoints, " points move)");
+         }
+         return;
+      }
+
+      // Stage 2: Trailing stop (starts immediately after breakeven)
+      if(g_breakevenReached[posIndex])
+      {
+         // Calculate trailing SL: currentPrice - trailing distance
+         double trailingDistance = InpBelowBaseline_TrailingPoints * _Point;
+         double newSL = NormalizeDouble(currentPrice - trailingDistance, _Digits);
+
+         // Only update if new SL is better than current SL and above breakeven
+         if(newSL > currentSL && newSL > g_breakevenPrice[posIndex])
+         {
             if(SafeOrderModify(ticket, newSL, tp))
             {
-               Print("BUY #", ticket, " ATR_Trend_Ind M1 SL updated from ", currentSL, " to ", newSL);
+               Print("BUY #", ticket, " trailing SL updated from ", currentSL, " to ", newSL,
+                     " (trailing ", InpBelowBaseline_TrailingPoints, " points from ", currentPrice, ")");
             }
-            else
-            {
-               Print("BUY #", ticket, " Failed to update SL to ", newSL);
-            }
-         }
-         else
-         {
-            if(atrStopPrice <= 0)
-               Print("BUY #", ticket, " ATR_Trend_Ind stop price invalid: ", atrStopPrice);
-            else if(atrStopPrice <= currentSL)
-               Print("BUY #", ticket, " ATR_Trend_Ind stop (", atrStopPrice, ") not > Current SL (", currentSL, ")");
-            else if(atrStopPrice <= g_breakevenPrice[posIndex])
-               Print("BUY #", ticket, " ATR_Trend_Ind stop (", atrStopPrice, ") not > Breakeven (", g_breakevenPrice[posIndex], ")");
          }
       }
-      else
+   }
+   else
+   {
+      // Above Baseline: ATR Multi-Timeframe Method
+      double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+      double priceMove = currentPrice - openPrice;
+
+      // Stage 1: Move to breakeven
+      if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+      {
+         double newSL = NormalizeDouble(openPrice, _Digits);
+         if(SafeOrderModify(ticket, newSL, tp))
+         {
+            g_breakevenReached[posIndex] = true;
+            g_breakevenPrice[posIndex] = newSL;
+            Print("BUY #", ticket, " moved to breakeven at ", newSL);
+         }
+         return;
+      }
+
+      // Stage 2: Wait for pause trigger
+      if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
+      {
+         double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+         double additionalMove = priceMove - requiredMoveForBreakeven;
+
+         if(additionalMove >= requiredAdditionalMove)
+         {
+            g_nextMoveReached[posIndex] = true;
+            g_timeframeLevel[posIndex] = 0;  // Start with M1
+            g_lastBarTime[posIndex] = 0;
+
+            Print("BUY #", ticket, " ready for ATR management (Multi-Timeframe progression)");
+         }
+         return;
+      }
+
+      // Stage 3: Active ATR management with timeframe progression
+      if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
       {
          // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
@@ -2034,91 +2001,81 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    double currentSL = PositionGetDouble(POSITION_SL);
    double tp = PositionGetDouble(POSITION_TP);
 
-   double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
-   double priceMove = openPrice - currentPrice;
-
-   // Stage 1: Move to breakeven
-   if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+   if(useBelowBaselineMethod)
    {
-      double newSL = NormalizeDouble(openPrice, _Digits);
-      if(SafeOrderModify(ticket, newSL, tp))
+      // Below Baseline: Points-Based Trailing
+      double priceMove = openPrice - currentPrice;
+      double priceMovePoints = priceMove / _Point;
+
+      // Stage 1: Move to breakeven when price moves specified points
+      if(!g_breakevenReached[posIndex] && priceMovePoints >= InpBelowBaseline_BreakevenPoints)
       {
-         g_breakevenReached[posIndex] = true;
-         g_breakevenPrice[posIndex] = newSL;
-         Print("SELL #", ticket, " moved to breakeven at ", newSL);
-      }
-      return;
-   }
-
-   // Stage 2: Wait for pause trigger
-   if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
-   {
-      double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
-      double additionalMove = priceMove - requiredMoveForBreakeven;
-
-      if(additionalMove >= requiredAdditionalMove)
-      {
-         g_nextMoveReached[posIndex] = true;
-         g_timeframeLevel[posIndex] = 0;  // Start with M1
-
-         // Initialize bar time to 0 so it will process on next tick
-         g_lastBarTime[posIndex] = 0;
-
-         Print("SELL #", ticket, " ready for ATR management. Method: ",
-               (useBelowBaselineMethod ? "ATR M1 only" : "ATR Multi-Timeframe progression"));
-      }
-      return;
-   }
-
-   // Stage 3: Active management
-   if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
-   {
-      if(useBelowBaselineMethod)
-      {
-         // ATR method on M1 only (below baseline)
-         ENUM_TIMEFRAMES currentTF = PERIOD_M1;
-
-         // Check if new bar has formed on M1
-         datetime currentBarTime = iTime(_Symbol, currentTF, 0);
-
-         // If lastBarTime is 0 (initial state) or different from current, we have a new bar
-         if(g_lastBarTime[posIndex] != 0 && currentBarTime == g_lastBarTime[posIndex])
-            return;  // No new bar yet, skip this tick
-
-         // Update last bar time
-         g_lastBarTime[posIndex] = currentBarTime;
-
-         double atrStopPrice = GetATRTrendIndValue(currentTF, POSITION_TYPE_SELL, posIndex);
-
-         // Log detailed debug info with ATR_Trend_Ind value
-         Print("SELL #", ticket, " M1 ATR_Trend_Ind Check | Bar: ", TimeToString(currentBarTime),
-               " | ATR_Trend_Ind Stop Price: ", atrStopPrice, " | Current SL: ", currentSL,
-               " | Breakeven: ", g_breakevenPrice[posIndex],
-               " | Price: ", currentPrice, " | Open: ", openPrice);
-
-         if(atrStopPrice > 0 && atrStopPrice < currentSL && atrStopPrice < g_breakevenPrice[posIndex])
+         double newSL = NormalizeDouble(openPrice, _Digits);
+         if(SafeOrderModify(ticket, newSL, tp))
          {
-            double newSL = NormalizeDouble(atrStopPrice, _Digits);
+            g_breakevenReached[posIndex] = true;
+            g_breakevenPrice[posIndex] = newSL;
+            Print("SELL #", ticket, " moved to breakeven at ", newSL, " (", priceMovePoints, " points move)");
+         }
+         return;
+      }
+
+      // Stage 2: Trailing stop (starts immediately after breakeven)
+      if(g_breakevenReached[posIndex])
+      {
+         // Calculate trailing SL: currentPrice + trailing distance
+         double trailingDistance = InpBelowBaseline_TrailingPoints * _Point;
+         double newSL = NormalizeDouble(currentPrice + trailingDistance, _Digits);
+
+         // Only update if new SL is better than current SL and below breakeven
+         if(newSL < currentSL && newSL < g_breakevenPrice[posIndex])
+         {
             if(SafeOrderModify(ticket, newSL, tp))
             {
-               Print("SELL #", ticket, " ATR_Trend_Ind M1 SL updated from ", currentSL, " to ", newSL);
+               Print("SELL #", ticket, " trailing SL updated from ", currentSL, " to ", newSL,
+                     " (trailing ", InpBelowBaseline_TrailingPoints, " points from ", currentPrice, ")");
             }
-            else
-            {
-               Print("SELL #", ticket, " Failed to update SL to ", newSL);
-            }
-         }
-         else
-         {
-            if(atrStopPrice <= 0)
-               Print("SELL #", ticket, " ATR_Trend_Ind stop price invalid: ", atrStopPrice);
-            else if(atrStopPrice >= currentSL)
-               Print("SELL #", ticket, " ATR_Trend_Ind stop (", atrStopPrice, ") not < Current SL (", currentSL, ")");
-            else if(atrStopPrice >= g_breakevenPrice[posIndex])
-               Print("SELL #", ticket, " ATR_Trend_Ind stop (", atrStopPrice, ") not < Breakeven (", g_breakevenPrice[posIndex], ")");
          }
       }
-      else
+   }
+   else
+   {
+      // Above Baseline: ATR Multi-Timeframe Method
+      double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+      double priceMove = openPrice - currentPrice;
+
+      // Stage 1: Move to breakeven
+      if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
+      {
+         double newSL = NormalizeDouble(openPrice, _Digits);
+         if(SafeOrderModify(ticket, newSL, tp))
+         {
+            g_breakevenReached[posIndex] = true;
+            g_breakevenPrice[posIndex] = newSL;
+            Print("SELL #", ticket, " moved to breakeven at ", newSL);
+         }
+         return;
+      }
+
+      // Stage 2: Wait for pause trigger
+      if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
+      {
+         double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+         double additionalMove = priceMove - requiredMoveForBreakeven;
+
+         if(additionalMove >= requiredAdditionalMove)
+         {
+            g_nextMoveReached[posIndex] = true;
+            g_timeframeLevel[posIndex] = 0;  // Start with M1
+            g_lastBarTime[posIndex] = 0;
+
+            Print("SELL #", ticket, " ready for ATR management (Multi-Timeframe progression)");
+         }
+         return;
+      }
+
+      // Stage 3: Active ATR management with timeframe progression
+      if(g_breakevenReached[posIndex] && g_nextMoveReached[posIndex])
       {
          // ATR method with timeframe progression (at/above baseline)
          ENUM_TIMEFRAMES currentTF = GetCurrentTimeframe(g_timeframeLevel[posIndex]);
