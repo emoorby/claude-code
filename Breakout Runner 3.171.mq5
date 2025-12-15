@@ -1592,9 +1592,9 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
                          SymbolInfoDouble(_Symbol, SYMBOL_BID) :
                          SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   // Use appropriate ATR settings based on position's method
-   int atrPeriod = useBelowBaselineMethod ? InpATRPeriod_BelowBaseline : InpATRPeriod_AboveBaseline;
-   double atrModifier = useBelowBaselineMethod ? InpATRModifier_BelowBaseline : InpATRModifier_AboveBaseline;
+   // Below baseline positions use points-based trailing, so always use Above Baseline ATR parameters for fallback
+   int atrPeriod = InpATRPeriod_AboveBaseline;
+   double atrModifier = InpATRModifier_AboveBaseline;
 
    int atrFallbackHandle = iATR(_Symbol, timeframe, atrPeriod);
    if(atrFallbackHandle != INVALID_HANDLE)
