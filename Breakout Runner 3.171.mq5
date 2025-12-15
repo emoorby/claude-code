@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.171"
+#property version   "3.172"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -40,6 +40,11 @@ input int      InpRangeStartHour    = 9;      // Range Start Hour (0-23)
 input int      InpRangeStartMinute  = 0;      // Range Start Minute (0-59)
 input int      InpRangeEndHour      = 9;      // Range End Hour (0-23)
 input int      InpRangeEndMinute    = 30;     // Range End Minute (0-59)
+
+// Pending Order Deletion Time
+input group "=== Pending Order Deletion ==="
+input int      InpDeleteOrdersHour   = 23;    // Delete Pending Orders Hour (0-23)
+input int      InpDeleteOrdersMinute = 59;    // Delete Pending Orders Minute (0-59)
 
 // Range Conditions
 input group "=== Range Conditions ==="
@@ -102,6 +107,7 @@ bool     g_rangeProcessed = false;    // Flag: range finalization has been attem
 bool     g_ordersPlaced = false;      // Flag: initial orders placed
 int      g_tradesCount = 0;           // Number of trades executed today
 int      g_currentDay = 0;            // Current day for daily reset
+bool     g_ordersDeletedToday = false; // Flag: pending orders deleted at specified time today
 ulong    g_buyStopTicket = 0;         // Buy stop order ticket
 ulong    g_sellStopTicket = 0;        // Sell stop order ticket
 double   g_rangeSize = 0.0;           // Size of the range in price
@@ -254,6 +260,9 @@ void OnTick()
 {
    // Check if new day has started
    CheckNewDay();
+
+   // Check if it's time to delete pending orders
+   CheckPendingOrderDeletionTime();
 
    // Get current time
    MqlDateTime time_struct;
@@ -985,37 +994,8 @@ void CheckNewDay()
       Print("Previous day: ", g_currentDay, " -> New day: ", time_struct.day);
       Print("Resetting daily values...");
 
-      // Delete any remaining pending orders
-      int deletedCount = 0;
-      for(int i = OrdersTotal() - 1; i >= 0; i--)
-      {
-         ulong ticket = OrderGetTicket(i);
-         if(OrderSelect(ticket))
-         {
-            if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
-               OrderGetInteger(ORDER_MAGIC) == InpMagicNumber)
-            {
-               MqlTradeRequest request;
-               MqlTradeResult result;
-               ZeroMemory(request);
-               ZeroMemory(result);
-
-               request.action = TRADE_ACTION_REMOVE;
-               request.order = ticket;
-
-               if(OrderSend(request, result))
-               {
-                  if(result.retcode == TRADE_RETCODE_DONE)
-                  {
-                     deletedCount++;
-                     Print("Deleted pending order #", ticket);
-                  }
-               }
-            }
-         }
-      }
-      if(deletedCount > 0)
-         Print("Deleted ", deletedCount, " pending order(s)");
+      // Reset pending order deletion flag for the new day
+      g_ordersDeletedToday = false;
 
       // PRESERVE STATE OF OPEN POSITIONS before resetting
       // Save current position states temporarily
@@ -1120,6 +1100,70 @@ void CheckNewDay()
       else
          Print("No open positions to preserve");
       Print("========================================");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check and delete pending orders at specified time                |
+//+------------------------------------------------------------------+
+void CheckPendingOrderDeletionTime()
+{
+   // Check if orders have already been deleted today
+   if(g_ordersDeletedToday)
+      return;
+
+   MqlDateTime time_struct;
+   TimeCurrent(time_struct);
+
+   // Calculate current time in minutes
+   int currentMinutes = time_struct.hour * 60 + time_struct.min;
+   int deleteTimeMinutes = InpDeleteOrdersHour * 60 + InpDeleteOrdersMinute;
+
+   // Check if current time has reached or passed the deletion time
+   if(currentMinutes >= deleteTimeMinutes)
+   {
+      // Delete any remaining pending orders
+      int deletedCount = 0;
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = OrderGetTicket(i);
+         if(OrderSelect(ticket))
+         {
+            if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
+               OrderGetInteger(ORDER_MAGIC) == InpMagicNumber)
+            {
+               MqlTradeRequest request;
+               MqlTradeResult result;
+               ZeroMemory(request);
+               ZeroMemory(result);
+
+               request.action = TRADE_ACTION_REMOVE;
+               request.order = ticket;
+
+               if(OrderSend(request, result))
+               {
+                  if(result.retcode == TRADE_RETCODE_DONE)
+                  {
+                     deletedCount++;
+                     Print("Deleted pending order #", ticket, " at ", time_struct.hour, ":",
+                           (time_struct.min < 10 ? "0" : ""), time_struct.min);
+                  }
+               }
+            }
+         }
+      }
+
+      if(deletedCount > 0)
+      {
+         Print("========================================");
+         Print("PENDING ORDER DELETION TIME REACHED");
+         Print("Deleted ", deletedCount, " pending order(s) at ", InpDeleteOrdersHour, ":",
+               (InpDeleteOrdersMinute < 10 ? "0" : ""), InpDeleteOrdersMinute);
+         Print("========================================");
+      }
+
+      // Mark orders as deleted for today
+      g_ordersDeletedToday = true;
    }
 }
 
