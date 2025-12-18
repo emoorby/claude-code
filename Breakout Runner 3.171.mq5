@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.172"
+#property version   "3.173"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -71,6 +71,7 @@ input string   InpTradeComment      = "ORB";  // Trade Comment
 // Advanced Trade Management
 input group "=== Advanced Trade Management ==="
 input double   InpBreakevenPercent     = 50.0;    // Move to Breakeven (% of Range)
+input int      InpBreakevenBufferPoints = 5;      // Breakeven Buffer (Points above/below entry)
 input double   InpPausePercent         = 25.0;    // Pause Before Management (% of Range)
 input double   InpBaselineBalance      = 10000.0; // Baseline Balance
 input ENUM_MAX_TIMEFRAME InpMaxTimeframe = MAX_TF_D1; // Maximum Timeframe for Progression
@@ -1899,12 +1900,15 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 1: Move to breakeven when price moves specified points
       if(!g_breakevenReached[posIndex] && priceMovePoints >= InpBelowBaseline_BreakevenPoints)
       {
-         double newSL = NormalizeDouble(openPrice, _Digits);
+         // Apply buffer above entry for buy orders
+         double bufferPrice = InpBreakevenBufferPoints * _Point;
+         double newSL = NormalizeDouble(openPrice + bufferPrice, _Digits);
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
             g_breakevenPrice[posIndex] = newSL;
-            Print("BUY #", ticket, " moved to breakeven at ", newSL, " (", priceMovePoints, " points move)");
+            Print("BUY #", ticket, " moved to breakeven+", InpBreakevenBufferPoints, " at ", newSL,
+                  " (", priceMovePoints, " points move)");
          }
          return;
       }
@@ -1936,12 +1940,14 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 1: Move to breakeven
       if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
       {
-         double newSL = NormalizeDouble(openPrice, _Digits);
+         // Apply buffer above entry for buy orders
+         double bufferPrice = InpBreakevenBufferPoints * _Point;
+         double newSL = NormalizeDouble(openPrice + bufferPrice, _Digits);
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
             g_breakevenPrice[posIndex] = newSL;
-            Print("BUY #", ticket, " moved to breakeven at ", newSL);
+            Print("BUY #", ticket, " moved to breakeven+", InpBreakevenBufferPoints, " at ", newSL);
          }
          return;
       }
@@ -2054,12 +2060,15 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 1: Move to breakeven when price moves specified points
       if(!g_breakevenReached[posIndex] && priceMovePoints >= InpBelowBaseline_BreakevenPoints)
       {
-         double newSL = NormalizeDouble(openPrice, _Digits);
+         // Apply buffer below entry for sell orders
+         double bufferPrice = InpBreakevenBufferPoints * _Point;
+         double newSL = NormalizeDouble(openPrice - bufferPrice, _Digits);
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
             g_breakevenPrice[posIndex] = newSL;
-            Print("SELL #", ticket, " moved to breakeven at ", newSL, " (", priceMovePoints, " points move)");
+            Print("SELL #", ticket, " moved to breakeven-", InpBreakevenBufferPoints, " at ", newSL,
+                  " (", priceMovePoints, " points move)");
          }
          return;
       }
@@ -2091,12 +2100,14 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 1: Move to breakeven
       if(!g_breakevenReached[posIndex] && priceMove >= requiredMoveForBreakeven)
       {
-         double newSL = NormalizeDouble(openPrice, _Digits);
+         // Apply buffer below entry for sell orders
+         double bufferPrice = InpBreakevenBufferPoints * _Point;
+         double newSL = NormalizeDouble(openPrice - bufferPrice, _Digits);
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
             g_breakevenPrice[posIndex] = newSL;
-            Print("SELL #", ticket, " moved to breakeven at ", newSL);
+            Print("SELL #", ticket, " moved to breakeven-", InpBreakevenBufferPoints, " at ", newSL);
          }
          return;
       }
