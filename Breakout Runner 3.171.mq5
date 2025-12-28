@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.174"
+#property version   "3.175"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -1904,6 +1904,21 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Apply buffer above entry for buy orders
          double bufferPrice = InpBreakevenBufferPoints * _Point;
          double newSL = NormalizeDouble(openPrice + bufferPrice, _Digits);
+
+         // Validate new SL meets broker's minimum stop level requirement
+         long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+         double minStopDistance = stopLevel * _Point;
+         double actualDistance = currentPrice - newSL;
+
+         if(actualDistance < minStopDistance)
+         {
+            Print("BUY #", ticket, " breakeven move skipped: SL too close to current price");
+            Print("  Required distance: ", stopLevel, " points (", minStopDistance, ")");
+            Print("  Actual distance: ", (actualDistance / _Point), " points (", actualDistance, ")");
+            Print("  Will retry when price moves further");
+            return;
+         }
+
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
@@ -1944,6 +1959,21 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Apply buffer above entry for buy orders
          double bufferPrice = InpBreakevenBufferPoints * _Point;
          double newSL = NormalizeDouble(openPrice + bufferPrice, _Digits);
+
+         // Validate new SL meets broker's minimum stop level requirement
+         long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+         double minStopDistance = stopLevel * _Point;
+         double actualDistance = currentPrice - newSL;
+
+         if(actualDistance < minStopDistance)
+         {
+            Print("BUY #", ticket, " breakeven move skipped: SL too close to current price");
+            Print("  Required distance: ", stopLevel, " points (", minStopDistance, ")");
+            Print("  Actual distance: ", (actualDistance / _Point), " points (", actualDistance, ")");
+            Print("  Will retry when price moves further");
+            return;
+         }
+
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
@@ -2064,6 +2094,21 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Apply buffer below entry for sell orders
          double bufferPrice = InpBreakevenBufferPoints * _Point;
          double newSL = NormalizeDouble(openPrice - bufferPrice, _Digits);
+
+         // Validate new SL meets broker's minimum stop level requirement
+         long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+         double minStopDistance = stopLevel * _Point;
+         double actualDistance = newSL - currentPrice;
+
+         if(actualDistance < minStopDistance)
+         {
+            Print("SELL #", ticket, " breakeven move skipped: SL too close to current price");
+            Print("  Required distance: ", stopLevel, " points (", minStopDistance, ")");
+            Print("  Actual distance: ", (actualDistance / _Point), " points (", actualDistance, ")");
+            Print("  Will retry when price moves further");
+            return;
+         }
+
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
@@ -2104,6 +2149,21 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
          // Apply buffer below entry for sell orders
          double bufferPrice = InpBreakevenBufferPoints * _Point;
          double newSL = NormalizeDouble(openPrice - bufferPrice, _Digits);
+
+         // Validate new SL meets broker's minimum stop level requirement
+         long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+         double minStopDistance = stopLevel * _Point;
+         double actualDistance = newSL - currentPrice;
+
+         if(actualDistance < minStopDistance)
+         {
+            Print("SELL #", ticket, " breakeven move skipped: SL too close to current price");
+            Print("  Required distance: ", stopLevel, " points (", minStopDistance, ")");
+            Print("  Actual distance: ", (actualDistance / _Point), " points (", actualDistance, ")");
+            Print("  Will retry when price moves further");
+            return;
+         }
+
          if(SafeOrderModify(ticket, newSL, tp))
          {
             g_breakevenReached[posIndex] = true;
