@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.173"
+#property version   "3.174"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -1576,10 +1576,11 @@ double GetATRTrendIndValue(ENUM_TIMEFRAMES timeframe, ENUM_POSITION_TYPE posType
       ArraySetAsSeries(values, true);
 
       int lookbackBars = 50;  // Look back up to 50 bars
-      if(CopyBuffer(atrHandle, targetBuffer, 0, lookbackBars, values) > 0)
+      int copiedBars = CopyBuffer(atrHandle, targetBuffer, 0, lookbackBars, values);
+      if(copiedBars > 0)
       {
-         // Search through bars from most recent to oldest
-         for(int i = 0; i < lookbackBars; i++)
+         // Search through bars from most recent to oldest (use actual copied count, not requested count)
+         for(int i = 0; i < copiedBars; i++)
          {
             // Check if value is valid (non-zero and reasonable price range)
             if(values[i] > 0 && values[i] > 100 && values[i] < 100000)
