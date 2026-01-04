@@ -1019,7 +1019,6 @@ void CheckNewDay()
       g_tradesCount = 0;
       g_buyStopTicket = 0;
       g_sellStopTicket = 0;
-      g_lastFilterCheckBarTime = 0;
       g_currentDay = time_struct.day;
 
       // Reset position tracking arrays
