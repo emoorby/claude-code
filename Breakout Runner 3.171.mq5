@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.175"
+#property version   "3.18"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -48,6 +48,7 @@ input int      InpDeleteOrdersMinute = 59;    // Delete Pending Orders Minute (0
 
 // Range Conditions
 input group "=== Range Conditions ==="
+input int      InpMinRangePoints    = 50;     // Minimum Range Size (Points)
 input int      InpMaxRangePoints    = 500;    // Maximum Range Size (Points)
 input ENUM_TRADE_DIRECTION InpTradeDirection = TRADE_BOTH; // Trade Direction
 
@@ -86,17 +87,11 @@ input group "=== Points-Based Trailing (Below Baseline) ==="
 input int      InpBelowBaseline_BreakevenPoints = 50;   // Breakeven Trigger (Points)
 input int      InpBelowBaseline_TrailingPoints  = 25;   // Trailing Stop Distance (Points)
 
-// ATR Volatility Filter
-input group "=== ATR Volatility Filter ==="
-input bool     InpEnableATRFilter      = false;   // Enable ATR Volatility Filter
-input bool     InpFilter_CheckATRIncreasing = true; // Check 1: ATR Must Be Increasing
-input bool     InpFilter_CheckSignificantIncrease = true; // Check 2: ATR Increase Must Be Significant
-input bool     InpFilter_CheckDirectionalMomentum = true; // Check 3: Directional Momentum Required
-input int      InpATRFilter_RecentCandles  = 2;   // Recent Candles (x)
-input int      InpATRFilter_EarlierCandles = 3;   // Earlier Candles (y)
-input double   InpATRFilter_MinIncreasePercent = 20.0; // Minimum ATR Increase (% of Earlier ATR)
-input int      InpDirectionalFilter_Candles = 5;  // Directional Candles to Check
-input int      InpDirectionalFilter_MinRequired = 4; // Minimum Directional Candles Required
+// ADX Filter
+input group "=== ADX Filter ==="
+input bool     InpEnableADXFilter  = true;   // Enable ADX Filter
+input int      InpADXPeriod        = 15;     // ADX Period
+input double   InpADXLevel         = 20.0;   // Minimum ADX Level
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
@@ -112,7 +107,7 @@ bool     g_ordersDeletedToday = false; // Flag: pending orders deleted at specif
 ulong    g_buyStopTicket = 0;         // Buy stop order ticket
 ulong    g_sellStopTicket = 0;        // Sell stop order ticket
 double   g_rangeSize = 0.0;           // Size of the range in price
-datetime g_lastFilterCheckBarTime = 0; // Last M1 bar time when filter was checked
+int      g_adxHandle = INVALID_HANDLE; // ADX indicator handle
 
 // Position tracking arrays for trade management
 ulong    g_positionTickets[100];         // Store up to 100 position tickets
@@ -160,7 +155,7 @@ int OnInit()
          StringFormat("%02d", InpRangeStartMinute), " to ",
          IntegerToString(InpRangeEndHour), ":",
          StringFormat("%02d", InpRangeEndMinute));
-   Print("Max Range: ", InpMaxRangePoints, " points");
+   Print("Range Size: ", InpMinRangePoints, " - ", InpMaxRangePoints, " points");
    Print("Trade Direction: ", EnumToString(InpTradeDirection));
    Print("Stop Loss: ", InpStopLossPercent, "% of range");
    Print("Take Profit: ", InpTakeProfitPercent, "% of range");
@@ -201,6 +196,22 @@ int OnInit()
    ArrayInitialize(g_lastBarTime, 0);
    ArrayInitialize(g_useBelowBaselineMethod, false);
    ArrayInitialize(g_lastATRValue, 0.0);
+
+   // Create ADX indicator handle if filter is enabled
+   if(InpEnableADXFilter)
+   {
+      g_adxHandle = iADX(_Symbol, PERIOD_CURRENT, InpADXPeriod);
+      if(g_adxHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ADX indicator handle");
+         return(INIT_FAILED);
+      }
+      Print("ADX Filter enabled (Period: ", InpADXPeriod, ", Level: ", InpADXLevel, ")");
+   }
+   else
+   {
+      Print("ADX Filter disabled");
+   }
 
    // Create ATR_Trend_Ind indicator handles for all timeframes - Above Baseline only
    // Below Baseline uses points-based trailing, so no indicators needed
@@ -248,6 +259,9 @@ void OnDeinit(const int reason)
    if(g_atrHandleH4_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleH4_Above);
    if(g_atrHandleD1_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleD1_Above);
 
+   // Release ADX indicator handle
+   if(g_adxHandle != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
+
    Print("========================================");
    Print("Opening Range Breakout EA Deinitialized");
    Print("Reason: ", reason);
@@ -287,8 +301,8 @@ void OnTick()
       PlaceStopOrders();
    }
 
-   // Check pending orders and run filter before they trigger
-   if(g_ordersPlaced && InpEnableATRFilter)
+   // Check pending orders and run ADX filter before they trigger
+   if(g_ordersPlaced && InpEnableADXFilter)
    {
       CheckPendingOrdersBeforeTrigger();
    }
@@ -350,14 +364,12 @@ void UpdateRange()
    // Update high if current high is higher
    if(high > g_rangeHigh)
    {
-      Print("Range High updated: ", g_rangeHigh, " -> ", high);
       g_rangeHigh = high;
    }
 
    // Update low if current low is lower
    if(low < g_rangeLow)
    {
-      Print("Range Low updated: ", g_rangeLow, " -> ", low);
       g_rangeLow = low;
    }
 }
@@ -382,6 +394,16 @@ void FinalizeRange()
    Print("Range High: ", g_rangeHigh);
    Print("Range Low: ", g_rangeLow);
    Print("Range Size: ", g_rangeSize, " (", rangeSizePoints, " points)");
+
+   // Check if range meets minimum size condition
+   if(rangeSizePoints < InpMinRangePoints)
+   {
+      Print("Range too small (", rangeSizePoints, " points < ",
+            InpMinRangePoints, " min) - Orders will NOT be placed");
+      g_rangeIdentified = false;
+      Print("========================================");
+      return;
+   }
 
    // Check if range meets maximum size condition
    if(rangeSizePoints > InpMaxRangePoints)
@@ -629,124 +651,66 @@ void PlaceStopOrders()
 //+------------------------------------------------------------------+
 void CheckPendingOrdersBeforeTrigger()
 {
-   // Check on every M1 bar close
-   datetime currentM1BarTime = iTime(_Symbol, PERIOD_M1, 0);
-
-   // If no new M1 bar has formed, skip the check
-   if(currentM1BarTime == g_lastFilterCheckBarTime)
-      return;
-
-   // New M1 bar - update the time
-   g_lastFilterCheckBarTime = currentM1BarTime;
-
    // Only run filter if we have pending orders
    bool hasPendingOrders = (g_buyStopTicket > 0 || g_sellStopTicket > 0);
    if(!hasPendingOrders)
       return;
 
-   Print("========================================");
-   Print("M1 Bar Close - Running filter check on pending orders");
-   Print("Bar Time: ", TimeToString(currentM1BarTime));
-
-   // Check Buy Stop Order
-   if(g_buyStopTicket > 0)
+   // Get current ADX value
+   double adxBuffer[1];
+   if(CopyBuffer(g_adxHandle, 0, 0, 1, adxBuffer) != 1)
    {
-      if(OrderSelect(g_buyStopTicket))
+      Print("ERROR: Failed to get ADX value for filter check");
+      return;
+   }
+
+   double currentADX = adxBuffer[0];
+   bool filterPassed = (currentADX >= InpADXLevel);
+
+   Print("ADX Filter Check: ADX = ", DoubleToString(currentADX, 2),
+         " | Required: ", InpADXLevel, " | ", (filterPassed ? "PASSED" : "FAILED"));
+
+   if(!filterPassed)
+   {
+      // ADX too low - delete pending orders
+      Print("ADX below threshold - Deleting pending orders");
+
+      // Delete Buy Stop if exists
+      if(g_buyStopTicket > 0)
       {
-         double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
-         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         MqlTradeRequest request;
+         MqlTradeResult result;
+         ZeroMemory(request);
+         ZeroMemory(result);
 
-         Print("Checking BUY STOP #", g_buyStopTicket, " | Order: ", orderPrice, " | ASK: ", currentAsk);
+         request.action = TRADE_ACTION_REMOVE;
+         request.order = g_buyStopTicket;
 
-         bool filterPassed = CheckATRFilter(ORDER_TYPE_BUY_STOP, g_rangeSize);
-
-         if(!filterPassed)
+         if(OrderSend(request, result) && result.retcode == TRADE_RETCODE_DONE)
          {
-            // Filter failed - delete the pending order
-            Print("Filter FAILED - Deleting BUY STOP order #", g_buyStopTicket);
-
-            MqlTradeRequest request;
-            MqlTradeResult result;
-            ZeroMemory(request);
-            ZeroMemory(result);
-
-            request.action = TRADE_ACTION_REMOVE;
-            request.order = g_buyStopTicket;
-
-            if(OrderSend(request, result))
-            {
-               if(result.retcode == TRADE_RETCODE_DONE)
-               {
-                  Print("BUY STOP order deleted - trade NOT counted towards daily limit");
-                  g_buyStopTicket = 0;
-               }
-               else
-               {
-                  Print("ERROR: Failed to delete BUY STOP order. Return code: ", result.retcode);
-               }
-            }
-            else
-            {
-               Print("ERROR: OrderSend failed to delete BUY STOP: ", GetLastError());
-            }
+            Print("BUY STOP #", g_buyStopTicket, " deleted (ADX filter)");
+            g_buyStopTicket = 0;
          }
-         else
+      }
+
+      // Delete Sell Stop if exists
+      if(g_sellStopTicket > 0)
+      {
+         MqlTradeRequest request;
+         MqlTradeResult result;
+         ZeroMemory(request);
+         ZeroMemory(result);
+
+         request.action = TRADE_ACTION_REMOVE;
+         request.order = g_sellStopTicket;
+
+         if(OrderSend(request, result) && result.retcode == TRADE_RETCODE_DONE)
          {
-            Print("Filter PASSED - BUY STOP order remains active");
+            Print("SELL STOP #", g_sellStopTicket, " deleted (ADX filter)");
+            g_sellStopTicket = 0;
          }
       }
    }
-
-   // Check Sell Stop Order
-   if(g_sellStopTicket > 0)
-   {
-      if(OrderSelect(g_sellStopTicket))
-      {
-         double orderPrice = OrderGetDouble(ORDER_PRICE_OPEN);
-         double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-         Print("Checking SELL STOP #", g_sellStopTicket, " | Order: ", orderPrice, " | BID: ", currentBid);
-
-         bool filterPassed = CheckATRFilter(ORDER_TYPE_SELL_STOP, g_rangeSize);
-
-         if(!filterPassed)
-         {
-            // Filter failed - delete the pending order
-            Print("Filter FAILED - Deleting SELL STOP order #", g_sellStopTicket);
-
-            MqlTradeRequest request;
-            MqlTradeResult result;
-            ZeroMemory(request);
-            ZeroMemory(result);
-
-            request.action = TRADE_ACTION_REMOVE;
-            request.order = g_sellStopTicket;
-
-            if(OrderSend(request, result))
-            {
-               if(result.retcode == TRADE_RETCODE_DONE)
-               {
-                  Print("SELL STOP order deleted - trade NOT counted towards daily limit");
-                  g_sellStopTicket = 0;
-               }
-               else
-               {
-                  Print("ERROR: Failed to delete SELL STOP order. Return code: ", result.retcode);
-               }
-            }
-            else
-            {
-               Print("ERROR: OrderSend failed to delete SELL STOP: ", GetLastError());
-            }
-         }
-         else
-         {
-            Print("Filter PASSED - SELL STOP order remains active");
-         }
-      }
-   }
-
-   Print("========================================");
 }
 
 //+------------------------------------------------------------------+
@@ -1362,155 +1326,6 @@ int FindPositionIndex(ulong ticket)
    return -1;
 }
 
-//+------------------------------------------------------------------+
-//| Check ATR Volatility Filter with Directional Momentum            |
-//| Returns true if all conditions pass (trade allowed)              |
-//| Returns false if any condition fails (trade rejected)            |
-//+------------------------------------------------------------------+
-bool CheckATRFilter(ENUM_ORDER_TYPE orderType, double rangeSize)
-{
-   if(!InpEnableATRFilter)
-      return true;  // Filter disabled, always pass
-
-   int recentCandles = InpATRFilter_RecentCandles;
-   int earlierCandles = InpATRFilter_EarlierCandles;
-   int directionalCandles = InpDirectionalFilter_Candles;
-
-   // Determine max bars needed for both ATR and directional checks
-   int atrBars = recentCandles + earlierCandles + 1;  // +1 for previous close
-   int maxBars = MathMax(atrBars, directionalCandles + 1);
-
-   double high[], low[], close[], open[];
-   ArraySetAsSeries(high, true);
-   ArraySetAsSeries(low, true);
-   ArraySetAsSeries(close, true);
-   ArraySetAsSeries(open, true);
-
-   // Copy price data starting from bar 1 (not current bar 0)
-   if(CopyHigh(_Symbol, PERIOD_CURRENT, 1, maxBars, high) <= 0 ||
-      CopyLow(_Symbol, PERIOD_CURRENT, 1, maxBars, low) <= 0 ||
-      CopyClose(_Symbol, PERIOD_CURRENT, 1, maxBars, close) <= 0 ||
-      CopyOpen(_Symbol, PERIOD_CURRENT, 1, maxBars, open) <= 0)
-   {
-      Print("ERROR: Failed to copy price data for filter. Allowing trade by default.");
-      return true;
-   }
-
-   // ===== PART 1: ATR Volatility Check =====
-   // Calculate ATR for recent candles (bars 1 to x)
-   double recentTRSum = 0;
-   for(int i = 0; i < recentCandles; i++)
-   {
-      double prevClose = close[i + 1];
-      double tr1 = high[i] - low[i];
-      double tr2 = MathAbs(high[i] - prevClose);
-      double tr3 = MathAbs(low[i] - prevClose);
-      double trueRange = MathMax(tr1, MathMax(tr2, tr3));
-      recentTRSum += trueRange;
-   }
-   double recentATR = recentTRSum / recentCandles;
-
-   // Calculate ATR for earlier candles (bars x+1 to x+y)
-   double earlierTRSum = 0;
-   for(int i = recentCandles; i < recentCandles + earlierCandles; i++)
-   {
-      double prevClose = close[i + 1];
-      double tr1 = high[i] - low[i];
-      double tr2 = MathAbs(high[i] - prevClose);
-      double tr3 = MathAbs(low[i] - prevClose);
-      double trueRange = MathMax(tr1, MathMax(tr2, tr3));
-      earlierTRSum += trueRange;
-   }
-   double earlierATR = earlierTRSum / earlierCandles;
-
-   // Check 1: ATR must be increasing
-   bool check1Enabled = InpFilter_CheckATRIncreasing;
-   bool atrIncreasing = (recentATR > earlierATR);
-   double atrIncrease = recentATR - earlierATR;
-   bool check1Passed = !check1Enabled || atrIncreasing;  // Pass if disabled or condition met
-
-   // Check 2: ATR increase must be significant (% of earlier ATR)
-   bool check2Enabled = InpFilter_CheckSignificantIncrease;
-   double minRequiredIncrease = earlierATR * (InpATRFilter_MinIncreasePercent / 100.0);
-   bool significantIncrease = (atrIncrease >= minRequiredIncrease);
-   bool check2Passed = !check2Enabled || significantIncrease;  // Pass if disabled or condition met
-
-   // ===== PART 2: Directional Momentum Check =====
-   bool check3Enabled = InpFilter_CheckDirectionalMomentum;
-   int directionalCount = 0;
-   for(int i = 0; i < directionalCandles; i++)
-   {
-      if(orderType == ORDER_TYPE_BUY_STOP)
-      {
-         // For BUY: count bullish candles (close > open)
-         if(close[i] > open[i])
-            directionalCount++;
-      }
-      else if(orderType == ORDER_TYPE_SELL_STOP)
-      {
-         // For SELL: count bearish candles (close < open)
-         if(close[i] < open[i])
-            directionalCount++;
-      }
-   }
-
-   // Check 3: Enough candles moving in breakout direction
-   bool directionalMomentum = (directionalCount >= InpDirectionalFilter_MinRequired);
-   bool check3Passed = !check3Enabled || directionalMomentum;  // Pass if disabled or condition met
-
-   // All ENABLED checks must pass
-   bool allChecksPassed = (check1Passed && check2Passed && check3Passed);
-
-   // Build list of failed checks for logging
-   string failedChecks = "";
-   if(check1Enabled && !atrIncreasing)
-      failedChecks += "Check 1 (ATR Increasing), ";
-   if(check2Enabled && !significantIncrease)
-      failedChecks += "Check 2 (Significant Increase), ";
-   if(check3Enabled && !directionalMomentum)
-      failedChecks += "Check 3 (Directional Momentum), ";
-
-   // Remove trailing comma
-   if(StringLen(failedChecks) > 0)
-      failedChecks = StringSubstr(failedChecks, 0, StringLen(failedChecks) - 2);
-
-   // Detailed logging
-   Print("========================================");
-   Print("VOLATILITY & MOMENTUM FILTER:");
-   Print("Breakout Type: ", (orderType == ORDER_TYPE_BUY_STOP ? "BUY" : "SELL"));
-   Print("");
-   Print("ATR VOLATILITY CHECK:");
-   Print("  Recent ", recentCandles, " candles ATR: ", DoubleToString(recentATR, _Digits));
-   Print("  Earlier ", earlierCandles, " candles ATR: ", DoubleToString(earlierATR, _Digits));
-   Print("  ATR Increase: ", DoubleToString(atrIncrease, _Digits),
-         " | Required: ", DoubleToString(minRequiredIncrease, _Digits),
-         " (", DoubleToString(InpATRFilter_MinIncreasePercent, 1), "% of Earlier ATR)");
-   Print("  Check 1 - ATR Increasing: ",
-         check1Enabled ? (atrIncreasing ? "PASS" : "FAIL - Recent ATR NOT > Earlier ATR") : "DISABLED");
-   Print("  Check 2 - Significant Increase: ",
-         check2Enabled ? (significantIncrease ? "PASS" : "FAIL - Increase too small") : "DISABLED");
-   Print("");
-   Print("DIRECTIONAL MOMENTUM CHECK:");
-   Print("  ", (orderType == ORDER_TYPE_BUY_STOP ? "Bullish" : "Bearish"), " candles: ",
-         directionalCount, " / ", directionalCandles);
-   Print("  Minimum required: ", InpDirectionalFilter_MinRequired);
-   Print("  Check 3 - Directional Momentum: ",
-         check3Enabled ? (directionalMomentum ? "PASS" : "FAIL - Not enough directional candles") : "DISABLED");
-   Print("");
-
-   if(allChecksPassed)
-   {
-      Print("FINAL RESULT: PASSED - All enabled checks passed");
-   }
-   else
-   {
-      Print("FINAL RESULT: FAILED - Trade Rejected");
-      Print("  Failed checks: ", failedChecks);
-   }
-   Print("========================================");
-
-   return allChecksPassed;
-}
 
 //+------------------------------------------------------------------+
 //| Get ATR Trend Indicator value                                    |
