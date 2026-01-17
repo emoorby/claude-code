@@ -4,7 +4,7 @@
 //|                    Opening Range Breakout Expert Adviser         |
 //+------------------------------------------------------------------+
 #property copyright "Opening Range Breakout EA"
-#property version   "3.18"
+#property version   "3.2"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -34,28 +34,28 @@ enum ENUM_MAX_TIMEFRAME
    MAX_TF_D1    // D1
 };
 
-// Range Time Settings
-input group "=== Range Time Settings ==="
-input int      InpRangeStartHour    = 9;      // Range Start Hour (0-23)
-input int      InpRangeStartMinute  = 0;      // Range Start Minute (0-59)
-input int      InpRangeEndHour      = 9;      // Range End Hour (0-23)
-input int      InpRangeEndMinute    = 30;     // Range End Minute (0-59)
+// Entry Time Settings
+input group "=== Entry Time Settings ==="
+input int      InpEntryHour    = 16;     // Entry Hour (0-23)
+input int      InpEntryMinute  = 30;     // Entry Minute (0-59)
+
+// ATR Range Calculation
+input group "=== ATR Range Calculation ==="
+input int      InpATRPeriod         = 10;    // ATR Period for Range Calculation
+input double   InpATRMultiplier     = 3.0;   // ATR Multiplier for R (default: 3.0)
 
 // Pending Order Deletion Time
 input group "=== Pending Order Deletion ==="
 input int      InpDeleteOrdersHour   = 23;    // Delete Pending Orders Hour (0-23)
 input int      InpDeleteOrdersMinute = 59;    // Delete Pending Orders Minute (0-59)
 
-// Range Conditions
-input group "=== Range Conditions ==="
-input int      InpMinRangePoints    = 50;     // Minimum Range Size (Points)
-input int      InpMaxRangePoints    = 500;    // Maximum Range Size (Points)
+// Trade Direction
+input group "=== Trade Direction ==="
 input ENUM_TRADE_DIRECTION InpTradeDirection = TRADE_BOTH; // Trade Direction
 
-// Stop Loss and Take Profit
-input group "=== Stop Loss & Take Profit ==="
-input double   InpStopLossPercent   = 100.0;  // Stop Loss (% of Range)
-input double   InpTakeProfitPercent = 200.0;  // Take Profit (% of Range)
+// Take Profit
+input group "=== Take Profit ==="
+input double   InpTakeProfitR = 10.0;  // Take Profit (R multiples)
 
 // Lot Size Settings
 input group "=== Lot Size Settings ==="
@@ -71,9 +71,9 @@ input string   InpTradeComment      = "ORB";  // Trade Comment
 
 // Advanced Trade Management
 input group "=== Advanced Trade Management ==="
-input double   InpBreakevenPercent     = 50.0;    // Move to Breakeven (% of Range)
+input double   InpBreakevenR           = 2.0;     // Move to Breakeven (R multiples)
 input int      InpBreakevenBufferPoints = 5;      // Breakeven Buffer (Points above/below entry)
-input double   InpPausePercent         = 25.0;    // Pause Before Management (% of Range)
+input double   InpPauseR               = 1.0;     // Pause Before Management (R multiples)
 input double   InpBaselineBalance      = 10000.0; // Baseline Balance
 input ENUM_MAX_TIMEFRAME InpMaxTimeframe = MAX_TF_D1; // Maximum Timeframe for Progression
 
@@ -96,17 +96,14 @@ input double   InpADXLevel         = 20.0;   // Minimum ADX Level
 //+------------------------------------------------------------------+
 //| Global Variables                                                  |
 //+------------------------------------------------------------------+
-double   g_rangeHigh = 0.0;           // High of the range
-double   g_rangeLow = 0.0;            // Low of the range
-bool     g_rangeIdentified = false;   // Flag: range has been identified
-bool     g_rangeProcessed = false;    // Flag: range finalization has been attempted
-bool     g_ordersPlaced = false;      // Flag: initial orders placed
+bool     g_ordersPlaced = false;      // Flag: orders placed at entry time
 int      g_tradesCount = 0;           // Number of trades executed today
 int      g_currentDay = 0;            // Current day for daily reset
 bool     g_ordersDeletedToday = false; // Flag: pending orders deleted at specified time today
 ulong    g_buyStopTicket = 0;         // Buy stop order ticket
 ulong    g_sellStopTicket = 0;        // Sell stop order ticket
-double   g_rangeSize = 0.0;           // Size of the range in price
+double   g_R = 0.0;                   // Calculated R value (3 × ATR) in price
+int      g_atrHandle = INVALID_HANDLE; // ATR indicator handle for R calculation
 int      g_adxHandle = INVALID_HANDLE; // ADX indicator handle
 
 // Position tracking arrays for trade management
@@ -149,16 +146,15 @@ bool     g_lastLoggedMethod = false;      // Last logged method (false = trailin
 int OnInit()
 {
    Print("========================================");
-   Print("Opening Range Breakout EA Initialized");
+   Print("ATR Breakout EA v3.2 Initialized");
    Print("========================================");
-   Print("Range Time: ", IntegerToString(InpRangeStartHour), ":",
-         StringFormat("%02d", InpRangeStartMinute), " to ",
-         IntegerToString(InpRangeEndHour), ":",
-         StringFormat("%02d", InpRangeEndMinute));
-   Print("Range Size: ", InpMinRangePoints, " - ", InpMaxRangePoints, " points");
+   Print("Entry Time: ", IntegerToString(InpEntryHour), ":",
+         StringFormat("%02d", InpEntryMinute));
+   Print("R Calculation: ", InpATRMultiplier, " × ATR(", InpATRPeriod, ")");
+   Print("Entry: Price ± R/2");
+   Print("Stop Loss: Opposite order price");
+   Print("Take Profit: ", InpTakeProfitR, "R");
    Print("Trade Direction: ", EnumToString(InpTradeDirection));
-   Print("Stop Loss: ", InpStopLossPercent, "% of range");
-   Print("Take Profit: ", InpTakeProfitPercent, "% of range");
    Print("Lot Mode: ", EnumToString(InpLotMode));
    if(InpLotMode == LOT_FIXED)
       Print("Fixed Lot Size: ", InpFixedLotSize);
@@ -166,17 +162,16 @@ int OnInit()
       Print("Risk Percent: ", InpRiskPercent, "%");
    Print("Max Trades Per Day: ", InpMaxTradesPerDay);
    Print("Magic Number: ", InpMagicNumber);
-   Print("Trade Comment: ", InpTradeComment);
    Print("========================================");
    Print("Trade Management Settings:");
    Print("Baseline Balance: ", InpBaselineBalance);
    Print("Below Baseline: Points-Based Trailing");
-   Print("  Breakeven Trigger: ", InpBelowBaseline_BreakevenPoints, " points");
-   Print("  Trailing Stop: ", InpBelowBaseline_TrailingPoints, " points");
-   Print("At/Above Baseline: ATR Multi-Timeframe method");
-   Print("  Breakeven Trigger: ", InpBreakevenPercent, "% of range");
-   Print("  Pause Before Trailing: ", InpPausePercent, "% of range");
-   Print("  ATR Period: ", InpATRPeriod_AboveBaseline, " | ATR Modifier: ", InpATRModifier_AboveBaseline);
+   Print("  Breakeven: ", InpBelowBaseline_BreakevenPoints, " points");
+   Print("  Trailing: ", InpBelowBaseline_TrailingPoints, " points");
+   Print("At/Above Baseline: ATR Multi-Timeframe");
+   Print("  Breakeven: ", InpBreakevenR, "R");
+   Print("  Pause: ", InpPauseR, "R");
+   Print("  Breakeven Buffer: ", InpBreakevenBufferPoints, " points");
    Print("========================================");
 
    // Initialize current day
@@ -196,6 +191,15 @@ int OnInit()
    ArrayInitialize(g_lastBarTime, 0);
    ArrayInitialize(g_useBelowBaselineMethod, false);
    ArrayInitialize(g_lastATRValue, 0.0);
+
+   // Create ATR indicator handle for R calculation
+   g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, InpATRPeriod);
+   if(g_atrHandle == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create ATR indicator handle");
+      return(INIT_FAILED);
+   }
+   Print("ATR indicator loaded successfully");
 
    // Create ADX indicator handle if filter is enabled
    if(InpEnableADXFilter)
@@ -259,6 +263,9 @@ void OnDeinit(const int reason)
    if(g_atrHandleH4_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleH4_Above);
    if(g_atrHandleD1_Above != INVALID_HANDLE) IndicatorRelease(g_atrHandleD1_Above);
 
+   // Release ATR indicator handle
+   if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+
    // Release ADX indicator handle
    if(g_adxHandle != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
 
@@ -279,26 +286,10 @@ void OnTick()
    // Check if it's time to delete pending orders
    CheckPendingOrderDeletionTime();
 
-   // Get current time
-   MqlDateTime time_struct;
-   TimeCurrent(time_struct);
-
-   // Check if we are within the range period
-   if(IsWithinRangeTime(time_struct))
+   // Check if it's entry time and place orders
+   if(!g_ordersPlaced && g_tradesCount < InpMaxTradesPerDay)
    {
-      UpdateRange();
-   }
-   else if(IsAfterRangeTime(time_struct) && !g_rangeProcessed)
-   {
-      // Range period has ended, finalize the range (only once per day)
-      FinalizeRange();
-      g_rangeProcessed = true;  // Mark as processed to prevent repeated messages
-   }
-
-   // If range is identified but orders not placed, place them
-   if(g_rangeIdentified && !g_ordersPlaced && g_tradesCount < InpMaxTradesPerDay)
-   {
-      PlaceStopOrders();
+      CheckEntryTime();
    }
 
    // Check pending orders and run ADX filter before they trigger
