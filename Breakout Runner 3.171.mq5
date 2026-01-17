@@ -312,103 +312,42 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Check if current time is within range period                     |
+//| Check if it's entry time and calculate R                         |
 //+------------------------------------------------------------------+
-bool IsWithinRangeTime(MqlDateTime &time_struct)
+void CheckEntryTime()
 {
-   int currentMinutes = time_struct.hour * 60 + time_struct.min;
-   int rangeStartMinutes = InpRangeStartHour * 60 + InpRangeStartMinute;
-   int rangeEndMinutes = InpRangeEndHour * 60 + InpRangeEndMinute;
+   MqlDateTime time_struct;
+   TimeCurrent(time_struct);
 
-   return (currentMinutes >= rangeStartMinutes && currentMinutes < rangeEndMinutes);
-}
+   // Check if current bar opened at entry time
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   MqlDateTime barTime_struct;
+   TimeToStruct(currentBarTime, barTime_struct);
 
-//+------------------------------------------------------------------+
-//| Check if current time is after range period                      |
-//+------------------------------------------------------------------+
-bool IsAfterRangeTime(MqlDateTime &time_struct)
-{
-   int currentMinutes = time_struct.hour * 60 + time_struct.min;
-   int rangeEndMinutes = InpRangeEndHour * 60 + InpRangeEndMinute;
+   // Only execute at the open of the bar at entry time
+   if(barTime_struct.hour != InpEntryHour || barTime_struct.min != InpEntryMinute)
+      return;
 
-   return (currentMinutes >= rangeEndMinutes);
-}
-
-//+------------------------------------------------------------------+
-//| Update range high and low during range period                    |
-//+------------------------------------------------------------------+
-void UpdateRange()
-{
-   double high = iHigh(_Symbol, PERIOD_CURRENT, 0);
-   double low = iLow(_Symbol, PERIOD_CURRENT, 0);
-
-   // Initialize range on first tick within range period
-   if(g_rangeHigh == 0.0 || g_rangeLow == 0.0)
+   // Calculate R using ATR
+   double atrBuffer[1];
+   if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) != 1)
    {
-      g_rangeHigh = high;
-      g_rangeLow = low;
-      Print("Range tracking started - Initial High: ", g_rangeHigh,
-            " Low: ", g_rangeLow);
+      Print("ERROR: Failed to get ATR value for R calculation");
       return;
    }
 
-   // Update high if current high is higher
-   if(high > g_rangeHigh)
-   {
-      g_rangeHigh = high;
-   }
-
-   // Update low if current low is lower
-   if(low < g_rangeLow)
-   {
-      g_rangeLow = low;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Finalize range after range period ends                           |
-//+------------------------------------------------------------------+
-void FinalizeRange()
-{
-   if(g_rangeHigh == 0.0 || g_rangeLow == 0.0)
-   {
-      Print("ERROR: Range not properly tracked. High: ", g_rangeHigh,
-            " Low: ", g_rangeLow);
-      return;
-   }
-
-   g_rangeSize = g_rangeHigh - g_rangeLow;
-   double rangeSizePoints = g_rangeSize / _Point;
+   g_R = InpATRMultiplier * atrBuffer[0];
+   double R_points = g_R / _Point;
 
    Print("========================================");
-   Print("Range Period Ended - Range Finalized");
-   Print("Range High: ", g_rangeHigh);
-   Print("Range Low: ", g_rangeLow);
-   Print("Range Size: ", g_rangeSize, " (", rangeSizePoints, " points)");
-
-   // Check if range meets minimum size condition
-   if(rangeSizePoints < InpMinRangePoints)
-   {
-      Print("Range too small (", rangeSizePoints, " points < ",
-            InpMinRangePoints, " min) - Orders will NOT be placed");
-      g_rangeIdentified = false;
-      Print("========================================");
-      return;
-   }
-
-   // Check if range meets maximum size condition
-   if(rangeSizePoints > InpMaxRangePoints)
-   {
-      Print("Range too large (", rangeSizePoints, " points > ",
-            InpMaxRangePoints, " max) - Orders will NOT be placed");
-      g_rangeIdentified = false;
-      Print("========================================");
-      return;
-   }
-
-   Print("Range size acceptable - Orders will be placed");
+   Print("ENTRY TIME REACHED: ", InpEntryHour, ":", StringFormat("%02d", InpEntryMinute));
+   Print("ATR Value: ", atrBuffer[0]);
+   Print("R Calculated: ", g_R, " (", R_points, " points)");
+   Print("R = ", InpATRMultiplier, " × ATR(", InpATRPeriod, ")");
    Print("========================================");
-   g_rangeIdentified = true;
+
+   // Place orders
+   PlaceStopOrders();
 }
 
 //+------------------------------------------------------------------+
@@ -466,29 +405,29 @@ double CalculateLotSize(double stopLossDistance)
 void PlaceStopOrders()
 {
    Print("========================================");
-   Print("Attempting to place stop orders...");
+   Print("Placing stop orders using R-based calculation...");
 
-   // Get current market information
+   // Get current market prices
+   double currentPrice = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) + SymbolInfoDouble(_Symbol, SYMBOL_BID)) / 2.0;
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double spread = ask - bid;
-   long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double stopLevelPrice = stopLevel * _Point;
 
-   Print("Current Market Info:");
-   Print("  Ask: ", ask, " | Bid: ", bid);
-   Print("  Spread: ", spread, " (", (spread/_Point), " points)");
-   Print("  Broker Stop Level: ", stopLevel, " points (", stopLevelPrice, " price)");
+   Print("Current Price (mid): ", currentPrice);
+   Print("Ask: ", ask, " | Bid: ", bid);
+   Print("R value: ", g_R, " (", (g_R/_Point), " points)");
 
-   // Calculate stop loss and take profit distances
-   double slDistance = g_rangeSize * InpStopLossPercent / 100.0;
-   double tpDistance = g_rangeSize * InpTakeProfitPercent / 100.0;
+   // Calculate order prices
+   double halfR = g_R / 2.0;
+   double buyStopPrice = NormalizeDouble(currentPrice + halfR, _Digits);
+   double sellStopPrice = NormalizeDouble(currentPrice - halfR, _Digits);
 
-   Print("Stop Loss Distance: ", slDistance, " (", InpStopLossPercent, "% of range)");
-   Print("Take Profit Distance: ", tpDistance, " (", InpTakeProfitPercent, "% of range)");
+   Print("BUY STOP Entry: ", buyStopPrice, " (Price + R/2)");
+   Print("SELL STOP Entry: ", sellStopPrice, " (Price - R/2)");
+   Print("SL Distance: R (", g_R, ")");
+   Print("TP Distance: ", InpTakeProfitR, "R (", (InpTakeProfitR * g_R), ")");
 
-   // Calculate lot size
-   double lotSize = CalculateLotSize(slDistance);
+   // Calculate lot size based on R
+   double lotSize = CalculateLotSize(g_R);
 
    if(lotSize <= 0)
    {
@@ -497,60 +436,31 @@ void PlaceStopOrders()
       return;
    }
 
-   // Calculate adjusted order prices with automatic buffer
-   // Buffer = max(stop level, spread) + 2 points for safety
-   double buffer = MathMax(stopLevelPrice, spread) + (2 * _Point);
-
-   double buyStopPrice = g_rangeHigh;
-   double minBuyStopPrice = ask + buffer;
-
-   if(buyStopPrice < minBuyStopPrice)
-   {
-      Print("WARNING: Original buy stop price (", buyStopPrice,
-            ") too close to Ask (", ask, ")");
-      Print("  Minimum required: ", minBuyStopPrice, " (Ask + ", buffer, " buffer)");
-      buyStopPrice = minBuyStopPrice;
-      Print("  Adjusted buy stop price to: ", buyStopPrice);
-   }
-
-   double sellStopPrice = g_rangeLow;
-   double maxSellStopPrice = bid - buffer;
-
-   if(sellStopPrice > maxSellStopPrice)
-   {
-      Print("WARNING: Original sell stop price (", sellStopPrice,
-            ") too close to Bid (", bid, ")");
-      Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
-      sellStopPrice = maxSellStopPrice;
-      Print("  Adjusted sell stop price to: ", sellStopPrice);
-   }
-
    MqlTradeRequest request;
    MqlTradeResult result;
-   ZeroMemory(request);
-   ZeroMemory(result);
-
-   request.symbol = _Symbol;
-   request.volume = lotSize;
-   request.magic = InpMagicNumber;
-   request.comment = InpTradeComment;
-   request.deviation = 10;
-   request.type_filling = ORDER_FILLING_IOC;
 
    // Place Buy Stop Order
    if(InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_BUY_ONLY)
    {
+      ZeroMemory(request);
+      ZeroMemory(result);
+
       request.action = TRADE_ACTION_PENDING;
+      request.symbol = _Symbol;
+      request.volume = lotSize;
+      request.magic = InpMagicNumber;
+      request.comment = InpTradeComment;
       request.type = ORDER_TYPE_BUY_STOP;
-      request.price = NormalizeDouble(buyStopPrice, _Digits);
-      // SL and TP calculated from ORIGINAL range high, not adjusted entry price
-      request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
-      request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
+      request.price = buyStopPrice;
+      request.sl = sellStopPrice;  // SL = opposite order price
+      request.tp = NormalizeDouble(buyStopPrice + (InpTakeProfitR * g_R), _Digits);
+      request.deviation = 10;
+      request.type_filling = ORDER_FILLING_IOC;
 
       Print("Placing BUY STOP order:");
-      Print("  Price: ", request.price);
-      Print("  Stop Loss: ", request.sl);
-      Print("  Take Profit: ", request.tp);
+      Print("  Entry: ", request.price);
+      Print("  SL: ", request.sl, " (SELL STOP price)");
+      Print("  TP: ", request.tp, " (Entry + ", InpTakeProfitR, "R)");
       Print("  Lot Size: ", request.volume);
 
       if(OrderSend(request, result))
@@ -558,26 +468,17 @@ void PlaceStopOrders()
          if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
          {
             g_buyStopTicket = result.order;
-            Print("SUCCESS: Buy Stop order placed. Ticket: ", g_buyStopTicket);
+            Print("SUCCESS: Buy Stop #", g_buyStopTicket, " placed");
          }
          else
          {
-            Print("ERROR: Buy Stop order failed. Return code: ", result.retcode,
-                  " (", GetRetcodeDescription(result.retcode), ")");
-            Print("  Error details: ", result.comment);
+            Print("ERROR: Buy Stop failed - ", result.retcode, ": ", GetRetcodeDescription(result.retcode));
          }
       }
       else
       {
-         int lastError = GetLastError();
-         Print("ERROR: OrderSend failed for Buy Stop. Error code: ", lastError);
-         Print("  Error description: ", ErrorDescription(lastError));
+         Print("ERROR: OrderSend failed for Buy Stop - ", GetLastError());
       }
-   }
-   else
-   {
-      Print("Buy Stop order skipped (Trade Direction: ",
-            EnumToString(InpTradeDirection), ")");
    }
 
    // Place Sell Stop Order
@@ -592,17 +493,16 @@ void PlaceStopOrders()
       request.magic = InpMagicNumber;
       request.comment = InpTradeComment;
       request.type = ORDER_TYPE_SELL_STOP;
-      request.price = NormalizeDouble(sellStopPrice, _Digits);
-      // SL and TP calculated from ORIGINAL range low, not adjusted entry price
-      request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
-      request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
+      request.price = sellStopPrice;
+      request.sl = buyStopPrice;  // SL = opposite order price
+      request.tp = NormalizeDouble(sellStopPrice - (InpTakeProfitR * g_R), _Digits);
       request.deviation = 10;
       request.type_filling = ORDER_FILLING_IOC;
 
       Print("Placing SELL STOP order:");
-      Print("  Price: ", request.price);
-      Print("  Stop Loss: ", request.sl);
-      Print("  Take Profit: ", request.tp);
+      Print("  Entry: ", request.price);
+      Print("  SL: ", request.sl, " (BUY STOP price)");
+      Print("  TP: ", request.tp, " (Entry - ", InpTakeProfitR, "R)");
       Print("  Lot Size: ", request.volume);
 
       if(OrderSend(request, result))
@@ -610,30 +510,20 @@ void PlaceStopOrders()
          if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
          {
             g_sellStopTicket = result.order;
-            Print("SUCCESS: Sell Stop order placed. Ticket: ", g_sellStopTicket);
+            Print("SUCCESS: Sell Stop #", g_sellStopTicket, " placed");
          }
          else
          {
-            Print("ERROR: Sell Stop order failed. Return code: ", result.retcode,
-                  " (", GetRetcodeDescription(result.retcode), ")");
-            Print("  Error details: ", result.comment);
+            Print("ERROR: Sell Stop failed - ", result.retcode, ": ", GetRetcodeDescription(result.retcode));
          }
       }
       else
       {
-         int lastError = GetLastError();
-         Print("ERROR: OrderSend failed for Sell Stop. Error code: ", lastError);
-         Print("  Error description: ", ErrorDescription(lastError));
+         Print("ERROR: OrderSend failed for Sell Stop - ", GetLastError());
       }
-   }
-   else
-   {
-      Print("Sell Stop order skipped (Trade Direction: ",
-            EnumToString(InpTradeDirection), ")");
    }
 
    g_ordersPlaced = true;
-   Print("Stop orders placement complete");
    Print("========================================");
 }
 
