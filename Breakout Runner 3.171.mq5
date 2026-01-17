@@ -652,25 +652,12 @@ void CheckAndReplaceOrders()
       Print("Remaining trades allowed: ", InpMaxTradesPerDay - g_tradesCount);
 
       // Get current market prices
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double spread = ask - bid;
-      long stopLevel = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-      double stopLevelPrice = stopLevel * _Point;
+      double currentPrice = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) + SymbolInfoDouble(_Symbol, SYMBOL_BID)) / 2.0;
+      Print("Current Price (mid): ", currentPrice);
+      Print("Using R value: ", g_R);
 
-      // Calculate intelligent buffer (same as initial order placement)
-      double buffer = MathMax(stopLevelPrice, spread) + (2 * _Point);
-
-      Print("Current Market Info:");
-      Print("  Ask: ", ask, " | Bid: ", bid);
-      Print("  Spread: ", spread, " (", (spread/_Point), " points)");
-      Print("  Stop Level: ", stopLevel, " points (", stopLevelPrice, " price)");
-      Print("  Calculated Buffer: ", buffer, " (", (buffer/_Point), " points)");
-
-      // Calculate stop loss and take profit distances
-      double slDistance = g_rangeSize * InpStopLossPercent / 100.0;
-      double tpDistance = g_rangeSize * InpTakeProfitPercent / 100.0;
-      double lotSize = CalculateLotSize(slDistance);
+      // Calculate lot size based on R
+      double lotSize = CalculateLotSize(g_R);
 
       MqlTradeRequest request;
       MqlTradeResult result;
@@ -678,21 +665,12 @@ void CheckAndReplaceOrders()
       // Replace SELL Stop when BUY was triggered (only if sell stop doesn't already exist)
       if(buyOrderTriggered && g_sellStopTicket == 0 && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_SELL_ONLY))
       {
-         Print("Buy order was triggered - checking if sell stop needs replacement...");
-         Print("Sell stop ticket: ", g_sellStopTicket, " (0 = doesn't exist)");
+         Print("Buy order triggered - replacing sell stop...");
 
-         // Check if original range low price is still valid for a sell stop
-         double sellStopPrice = g_rangeLow;
-         double maxSellStopPrice = bid - buffer;
-
-         if(sellStopPrice > maxSellStopPrice)
-         {
-            Print("WARNING: Original sell stop price (", sellStopPrice,
-                  ") too close to Bid (", bid, ")");
-            Print("  Maximum allowed: ", maxSellStopPrice, " (Bid - ", buffer, " buffer)");
-            sellStopPrice = maxSellStopPrice;
-            Print("  Adjusted sell stop price to: ", sellStopPrice);
-         }
+         // Calculate new order prices using R
+         double halfR = g_R / 2.0;
+         double buyStopPrice = NormalizeDouble(currentPrice + halfR, _Digits);
+         double sellStopPrice = NormalizeDouble(currentPrice - halfR, _Digits);
 
          ZeroMemory(request);
          ZeroMemory(result);
@@ -703,59 +681,49 @@ void CheckAndReplaceOrders()
          request.magic = InpMagicNumber;
          request.comment = InpTradeComment;
          request.type = ORDER_TYPE_SELL_STOP;
-         request.price = NormalizeDouble(sellStopPrice, _Digits);
-         // SL and TP calculated from ORIGINAL range low, not adjusted entry price
-         request.sl = NormalizeDouble(g_rangeLow + slDistance, _Digits);
-         request.tp = NormalizeDouble(g_rangeLow - tpDistance, _Digits);
+         request.price = sellStopPrice;
+         request.sl = buyStopPrice;  // SL = opposite order price
+         request.tp = NormalizeDouble(sellStopPrice - (InpTakeProfitR * g_R), _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
-         Print("Replacing SELL STOP order:");
-         Print("  Price: ", request.price);
-         Print("  Stop Loss: ", request.sl);
-         Print("  Take Profit: ", request.tp);
+         Print("Replacing SELL STOP:");
+         Print("  Entry: ", request.price, " (Price - R/2)");
+         Print("  SL: ", request.sl, " (BUY STOP price)");
+         Print("  TP: ", request.tp, " (Entry - ", InpTakeProfitR, "R)");
 
          if(OrderSend(request, result))
          {
             if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
             {
                g_sellStopTicket = result.order;
-               Print("SUCCESS: Sell Stop order replaced. New Ticket: ", g_sellStopTicket);
+               g_buyStopTicket = 0;  // Store the buy stop price reference (stored in request for tracking)
+               Print("SUCCESS: Sell Stop #", g_sellStopTicket, " replaced");
             }
             else
             {
-               Print("ERROR: Sell Stop replacement failed. Return code: ", result.retcode,
-                     " (", GetRetcodeDescription(result.retcode), ")");
+               Print("ERROR: Sell Stop replacement failed - ", result.retcode);
             }
          }
          else
          {
-            Print("ERROR: OrderSend failed for Sell Stop replacement");
+            Print("ERROR: OrderSend failed for Sell Stop");
          }
       }
       else if(buyOrderTriggered && g_sellStopTicket > 0)
       {
-         Print("Buy order was triggered - sell stop already exists (Ticket: ", g_sellStopTicket, "), no replacement needed");
+         Print("Sell stop already exists (Ticket: ", g_sellStopTicket, ")");
       }
 
       // Replace BUY Stop when SELL was triggered (only if buy stop doesn't already exist)
       if(sellOrderTriggered && g_buyStopTicket == 0 && (InpTradeDirection == TRADE_BOTH || InpTradeDirection == TRADE_BUY_ONLY))
       {
-         Print("Sell order was triggered - checking if buy stop needs replacement...");
-         Print("Buy stop ticket: ", g_buyStopTicket, " (0 = doesn't exist)");
+         Print("Sell order triggered - replacing buy stop...");
 
-         // Check if original range high price is still valid for a buy stop
-         double buyStopPrice = g_rangeHigh;
-         double minBuyStopPrice = ask + buffer;
-
-         if(buyStopPrice < minBuyStopPrice)
-         {
-            Print("WARNING: Original buy stop price (", buyStopPrice,
-                  ") too close to Ask (", ask, ")");
-            Print("  Minimum required: ", minBuyStopPrice, " (Ask + ", buffer, " buffer)");
-            buyStopPrice = minBuyStopPrice;
-            Print("  Adjusted buy stop price to: ", buyStopPrice);
-         }
+         // Calculate new order prices using R
+         double halfR = g_R / 2.0;
+         double buyStopPrice = NormalizeDouble(currentPrice + halfR, _Digits);
+         double sellStopPrice = NormalizeDouble(currentPrice - halfR, _Digits);
 
          ZeroMemory(request);
          ZeroMemory(result);
@@ -766,39 +734,38 @@ void CheckAndReplaceOrders()
          request.magic = InpMagicNumber;
          request.comment = InpTradeComment;
          request.type = ORDER_TYPE_BUY_STOP;
-         request.price = NormalizeDouble(buyStopPrice, _Digits);
-         // SL and TP calculated from ORIGINAL range high, not adjusted entry price
-         request.sl = NormalizeDouble(g_rangeHigh - slDistance, _Digits);
-         request.tp = NormalizeDouble(g_rangeHigh + tpDistance, _Digits);
+         request.price = buyStopPrice;
+         request.sl = sellStopPrice;  // SL = opposite order price
+         request.tp = NormalizeDouble(buyStopPrice + (InpTakeProfitR * g_R), _Digits);
          request.deviation = 10;
          request.type_filling = ORDER_FILLING_IOC;
 
-         Print("Replacing BUY STOP order:");
-         Print("  Price: ", request.price);
-         Print("  Stop Loss: ", request.sl);
-         Print("  Take Profit: ", request.tp);
+         Print("Replacing BUY STOP:");
+         Print("  Entry: ", request.price, " (Price + R/2)");
+         Print("  SL: ", request.sl, " (SELL STOP price)");
+         Print("  TP: ", request.tp, " (Entry + ", InpTakeProfitR, "R)");
 
          if(OrderSend(request, result))
          {
             if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
             {
                g_buyStopTicket = result.order;
-               Print("SUCCESS: Buy Stop order replaced. New Ticket: ", g_buyStopTicket);
+               g_sellStopTicket = 0;  // Store the sell stop price reference (stored in request for tracking)
+               Print("SUCCESS: Buy Stop #", g_buyStopTicket, " replaced");
             }
             else
             {
-               Print("ERROR: Buy Stop replacement failed. Return code: ", result.retcode,
-                     " (", GetRetcodeDescription(result.retcode), ")");
+               Print("ERROR: Buy Stop replacement failed - ", result.retcode);
             }
          }
          else
          {
-            Print("ERROR: OrderSend failed for Buy Stop replacement");
+            Print("ERROR: OrderSend failed for Buy Stop");
          }
       }
       else if(sellOrderTriggered && g_buyStopTicket > 0)
       {
-         Print("Sell order was triggered - buy stop already exists (Ticket: ", g_buyStopTicket, "), no replacement needed");
+         Print("Buy stop already exists (Ticket: ", g_buyStopTicket, ")");
       }
 
       Print("========================================");
@@ -891,11 +858,7 @@ void CheckNewDay()
       }
 
       // Reset all daily tracking variables
-      g_rangeHigh = 0.0;
-      g_rangeLow = 0.0;
-      g_rangeSize = 0.0;
-      g_rangeIdentified = false;
-      g_rangeProcessed = false;
+      g_R = 0.0;
       g_ordersPlaced = false;
       g_tradesCount = 0;
       g_buyStopTicket = 0;
@@ -939,7 +902,7 @@ void CheckNewDay()
 
       Print("Daily reset complete");
       Print("Trade count reset to: 0");
-      Print("Range values cleared");
+      Print("R value reset - ready for new entry time");
       if(savedPositionCount > 0)
          Print("Position states preserved: ", savedPositionCount, " open position(s) will continue management");
       else
@@ -1645,7 +1608,7 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    else
    {
       // Above Baseline: ATR Multi-Timeframe Method
-      double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+      double requiredMoveForBreakeven = InpBreakevenR * g_R;
       double priceMove = currentPrice - openPrice;
 
       // Stage 1: Move to breakeven
@@ -1681,7 +1644,7 @@ void ManageBuyPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 2: Wait for pause trigger
       if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
       {
-         double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+         double requiredAdditionalMove = InpPauseR * g_R;
          double additionalMove = priceMove - requiredMoveForBreakeven;
 
          if(additionalMove >= requiredAdditionalMove)
@@ -1835,7 +1798,7 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
    else
    {
       // Above Baseline: ATR Multi-Timeframe Method
-      double requiredMoveForBreakeven = g_rangeSize * InpBreakevenPercent / 100.0;
+      double requiredMoveForBreakeven = InpBreakevenR * g_R;
       double priceMove = openPrice - currentPrice;
 
       // Stage 1: Move to breakeven
@@ -1871,7 +1834,7 @@ void ManageSellPosition(ulong ticket, int posIndex, bool useBelowBaselineMethod)
       // Stage 2: Wait for pause trigger
       if(g_breakevenReached[posIndex] && !g_nextMoveReached[posIndex])
       {
-         double requiredAdditionalMove = g_rangeSize * InpPausePercent / 100.0;
+         double requiredAdditionalMove = InpPauseR * g_R;
          double additionalMove = priceMove - requiredMoveForBreakeven;
 
          if(additionalMove >= requiredAdditionalMove)
