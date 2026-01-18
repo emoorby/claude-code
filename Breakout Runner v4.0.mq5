@@ -43,6 +43,7 @@ struct PositionTracking
     double entry_R;                    // R value when position was opened
     bool at_breakeven;                 // Whether position has moved to breakeven
     double breakeven_reached_price;    // Price when breakeven was reached
+    bool wait_period_logged;           // Whether wait period completion has been logged
 };
 
 PositionTracking tracked_positions[];
@@ -130,6 +131,7 @@ void AddPositionTracking(ulong ticket, double entry_R_value)
     tracked_positions[tracked_positions_count].entry_R = entry_R_value;
     tracked_positions[tracked_positions_count].at_breakeven = false;
     tracked_positions[tracked_positions_count].breakeven_reached_price = 0;
+    tracked_positions[tracked_positions_count].wait_period_logged = false;
     tracked_positions_count++;
 
     Print("Position tracking added: Ticket ", ticket, ", Entry R: ", DoubleToString(entry_R_value, _Digits));
@@ -693,7 +695,7 @@ void ManagePosition(ulong ticket)
             double distance_from_breakeven = current_price - position_breakeven_price;
             double distance_in_R = distance_from_breakeven / position_R;
 
-            if(distance_in_R >= WaitPeriod_R)
+            if(distance_in_R >= WaitPeriod_R && !tracked_positions[tracking_index].wait_period_logged)
             {
                 Print("--- BUY POSITION: Wait period completed ---");
                 Print("  Ticket: ", ticket);
@@ -701,6 +703,10 @@ void ManagePosition(ulong ticket)
                 Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
                 Print("  Position's R value: ", DoubleToString(position_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
+
+                // Mark as logged so we don't spam logs on every tick
+                tracked_positions[tracking_index].wait_period_logged = true;
+
                 //--- Future functionality will be added here
             }
         }
@@ -766,7 +772,7 @@ void ManagePosition(ulong ticket)
             double distance_from_breakeven = position_breakeven_price - current_price;
             double distance_in_R = distance_from_breakeven / position_R;
 
-            if(distance_in_R >= WaitPeriod_R)
+            if(distance_in_R >= WaitPeriod_R && !tracked_positions[tracking_index].wait_period_logged)
             {
                 Print("--- SELL POSITION: Wait period completed ---");
                 Print("  Ticket: ", ticket);
@@ -774,6 +780,10 @@ void ManagePosition(ulong ticket)
                 Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
                 Print("  Position's R value: ", DoubleToString(position_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
+
+                // Mark as logged so we don't spam logs on every tick
+                tracked_positions[tracking_index].wait_period_logged = true;
+
                 //--- Future functionality will be added here
             }
         }
