@@ -7,16 +7,28 @@
 #property version   "4.00"
 #property strict
 
+//--- Enumerations
+enum ENUM_LOT_MODE
+{
+    LOT_MODE_FIXED,           // Fixed Lot Size
+    LOT_MODE_RISK_PERCENT     // Risk Percentage
+};
+
 //--- Input parameters
-input string    OrderTime = "09:00";           // Time to place orders (HH:MM)
-input int       ATR_Period = 10;               // ATR Period
-input double    ATR_Multiplier = 3.0;          // ATR Multiplier
-input double    LotSize = 0.1;                 // Lot Size
-input double    BreakevenTrigger_R = 1.0;      // Breakeven trigger (in R)
-input double    WaitPeriod_R = 0.5;            // Wait period after breakeven (in R)
-input double    StopLoss_R = 1.0;              // Stop Loss (in R from entry)
-input double    TakeProfit_R = 2.0;            // Take Profit (in R from entry)
-input int       MagicNumber = 240100;          // Magic Number
+input string    OrderTime = "09:00";                    // Time to place orders (HH:MM)
+input int       ATR_Period = 10;                        // ATR Period
+input double    ATR_Multiplier = 3.0;                   // ATR Multiplier
+input ENUM_LOT_MODE LotSizingMode = LOT_MODE_RISK_PERCENT;  // Lot Sizing Mode
+input double    FixedLotSize = 0.1;                     // Fixed Lot Size
+input double    RiskPercent = 1.0;                      // Risk Percentage (for Risk mode)
+input double    BreakevenTrigger_R = 1.0;               // Breakeven trigger (in R)
+input double    BreakevenBuffer_Points = 5;             // Breakeven buffer (in points)
+input double    WaitPeriod_R = 0.5;                     // Wait period after breakeven (in R)
+input double    StopLoss_R = 1.0;                       // Stop Loss (in R from entry)
+input int       MinStopLoss_Points = 100;               // Minimum Stop Loss (in points)
+input double    TakeProfit_R = 2.0;                     // Take Profit (in R from entry)
+input string    OrderComment = "Breakout Runner v4.0";  // Order Comment
+input int       MagicNumber = 240100;                   // Magic Number
 
 //--- Global variables
 int atr_handle;
@@ -50,11 +62,18 @@ int OnInit()
     Print("  - Order Time: ", OrderTime);
     Print("  - ATR Period: ", ATR_Period);
     Print("  - ATR Multiplier: ", ATR_Multiplier);
-    Print("  - Lot Size: ", LotSize);
+    Print("  - Lot Sizing Mode: ", (LotSizingMode == LOT_MODE_FIXED ? "Fixed Lot Size" : "Risk Percentage"));
+    if(LotSizingMode == LOT_MODE_FIXED)
+        Print("  - Fixed Lot Size: ", FixedLotSize);
+    else
+        Print("  - Risk Percentage: ", RiskPercent, "%");
     Print("  - Breakeven Trigger: ", BreakevenTrigger_R, " R");
+    Print("  - Breakeven Buffer: ", BreakevenBuffer_Points, " points");
     Print("  - Wait Period After Breakeven: ", WaitPeriod_R, " R");
     Print("  - Stop Loss: ", StopLoss_R, " R");
+    Print("  - Minimum Stop Loss: ", MinStopLoss_Points, " points");
     Print("  - Take Profit: ", TakeProfit_R, " R");
+    Print("  - Order Comment: ", OrderComment);
     Print("  - Magic Number: ", MagicNumber);
     Print("=================================================");
     Print("Initialization completed successfully");
@@ -88,6 +107,92 @@ void OnTick()
 
     //--- Manage existing positions
     ManagePositions();
+}
+
+//+------------------------------------------------------------------+
+//| Calculate lot size based on risk                                |
+//+------------------------------------------------------------------+
+double CalculateLotSize(double stop_loss_distance)
+{
+    double lot_size = 0;
+
+    if(LotSizingMode == LOT_MODE_FIXED)
+    {
+        lot_size = FixedLotSize;
+        Print("--- Lot Size Calculation (Fixed Mode) ---");
+        Print("  Using Fixed Lot Size: ", lot_size);
+    }
+    else // LOT_MODE_RISK_PERCENT
+    {
+        Print("--- Lot Size Calculation (Risk Percentage Mode) ---");
+
+        //--- Get account balance
+        double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        Print("  Account Balance: ", DoubleToString(account_balance, 2));
+
+        //--- Calculate risk amount in account currency
+        double risk_amount = account_balance * RiskPercent / 100.0;
+        Print("  Risk Amount: ", DoubleToString(risk_amount, 2), " (", RiskPercent, "% of balance)");
+
+        //--- Get symbol properties
+        double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+        double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+        double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+        Print("  Symbol Tick Size: ", tick_size);
+        Print("  Symbol Tick Value: ", tick_value);
+        Print("  Symbol Point: ", point);
+
+        //--- Calculate stop loss in points
+        double sl_points = stop_loss_distance / point;
+        Print("  Stop Loss Distance: ", DoubleToString(stop_loss_distance, _Digits));
+        Print("  Stop Loss Points: ", DoubleToString(sl_points, 0));
+
+        //--- Calculate point value
+        double point_value = tick_value / tick_size * point;
+        Print("  Point Value: ", point_value);
+
+        //--- Calculate lot size
+        if(sl_points > 0 && point_value > 0)
+        {
+            lot_size = risk_amount / (sl_points * point_value);
+            Print("  Calculated Lot Size: ", DoubleToString(lot_size, 2));
+        }
+        else
+        {
+            Print("ERROR: Invalid calculation parameters");
+            lot_size = FixedLotSize; // Fallback to fixed lot size
+            Print("  Using fallback Fixed Lot Size: ", lot_size);
+        }
+    }
+
+    //--- Normalize lot size to symbol requirements
+    double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+    Print("  Symbol Min Lot: ", min_lot);
+    Print("  Symbol Max Lot: ", max_lot);
+    Print("  Symbol Lot Step: ", lot_step);
+
+    //--- Normalize to lot step
+    lot_size = MathFloor(lot_size / lot_step) * lot_step;
+
+    //--- Apply min/max constraints
+    if(lot_size < min_lot)
+    {
+        lot_size = min_lot;
+        Print("  Lot size adjusted to minimum: ", lot_size);
+    }
+    if(lot_size > max_lot)
+    {
+        lot_size = max_lot;
+        Print("  Lot size adjusted to maximum: ", lot_size);
+    }
+
+    Print("  Final Lot Size: ", lot_size);
+
+    return lot_size;
 }
 
 //+------------------------------------------------------------------+
@@ -177,14 +282,38 @@ void PlacePendingOrders()
     Print("Buy Stop Price: ", DoubleToString(buy_stop_price, _Digits), " (Current + R/2)");
     Print("Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits), " (Current - R/2)");
 
+    //--- Calculate stop loss distance
+    double stop_loss_distance = current_R * StopLoss_R;
+    Print("Stop Loss Distance: ", DoubleToString(stop_loss_distance, _Digits), " (", StopLoss_R, " R)");
+
+    //--- Validate minimum stop loss
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    double sl_points = stop_loss_distance / point;
+    Print("Stop Loss in Points: ", DoubleToString(sl_points, 0));
+
+    if(sl_points < MinStopLoss_Points)
+    {
+        Print("WARNING: Calculated SL (", DoubleToString(sl_points, 0), " points) is less than minimum (", MinStopLoss_Points, " points)");
+        Print("Adjusting stop loss to minimum: ", MinStopLoss_Points, " points");
+        stop_loss_distance = MinStopLoss_Points * point;
+        sl_points = MinStopLoss_Points;
+    }
+    else
+    {
+        Print("Stop loss validation passed: ", DoubleToString(sl_points, 0), " points >= ", MinStopLoss_Points, " points (minimum)");
+    }
+
     //--- Calculate stop loss and take profit levels
-    double buy_sl = buy_stop_price - (current_R * StopLoss_R);
+    double buy_sl = buy_stop_price - stop_loss_distance;
     double buy_tp = buy_stop_price + (current_R * TakeProfit_R);
-    double sell_sl = sell_stop_price + (current_R * StopLoss_R);
+    double sell_sl = sell_stop_price + stop_loss_distance;
     double sell_tp = sell_stop_price - (current_R * TakeProfit_R);
 
     Print("Buy Stop - SL: ", DoubleToString(buy_sl, _Digits), ", TP: ", DoubleToString(buy_tp, _Digits));
     Print("Sell Stop - SL: ", DoubleToString(sell_sl, _Digits), ", TP: ", DoubleToString(sell_tp, _Digits));
+
+    //--- Calculate lot size
+    double calculated_lot_size = CalculateLotSize(stop_loss_distance);
 
     //--- Normalize prices
     buy_stop_price = NormalizeDouble(buy_stop_price, _Digits);
@@ -201,22 +330,24 @@ void PlacePendingOrders()
 
     request.action = TRADE_ACTION_PENDING;
     request.symbol = _Symbol;
-    request.volume = LotSize;
+    request.volume = calculated_lot_size;
     request.type = ORDER_TYPE_BUY_STOP;
     request.price = buy_stop_price;
     request.sl = buy_sl;
     request.tp = buy_tp;
     request.deviation = 10;
     request.magic = MagicNumber;
-    request.comment = "Breakout Runner v4.0 - Buy";
+    request.comment = OrderComment + " - Buy";
 
     if(OrderSend(request, result))
     {
         Print("SUCCESS: Buy Stop order placed");
         Print("  Order Ticket: ", result.order);
+        Print("  Volume: ", calculated_lot_size);
         Print("  Price: ", DoubleToString(buy_stop_price, _Digits));
         Print("  SL: ", DoubleToString(buy_sl, _Digits));
         Print("  TP: ", DoubleToString(buy_tp, _Digits));
+        Print("  Comment: ", OrderComment + " - Buy");
     }
     else
     {
@@ -231,15 +362,17 @@ void PlacePendingOrders()
     request.price = sell_stop_price;
     request.sl = sell_sl;
     request.tp = sell_tp;
-    request.comment = "Breakout Runner v4.0 - Sell";
+    request.comment = OrderComment + " - Sell";
 
     if(OrderSend(request, result))
     {
         Print("SUCCESS: Sell Stop order placed");
         Print("  Order Ticket: ", result.order);
+        Print("  Volume: ", calculated_lot_size);
         Print("  Price: ", DoubleToString(sell_stop_price, _Digits));
         Print("  SL: ", DoubleToString(sell_sl, _Digits));
         Print("  TP: ", DoubleToString(sell_tp, _Digits));
+        Print("  Comment: ", OrderComment + " - Sell");
     }
     else
     {
@@ -350,7 +483,14 @@ void ManagePosition(ulong ticket)
             Print("  Open Price: ", DoubleToString(position_open_price, _Digits));
             Print("  Current Price: ", DoubleToString(current_price, _Digits));
             Print("  Profit: ", DoubleToString(profit_in_R, 2), " R");
-            Print("  Moving Stop Loss to Breakeven");
+            Print("  Moving Stop Loss to Breakeven with buffer");
+
+            //--- Calculate breakeven price with buffer
+            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            double breakeven_price = position_open_price + (BreakevenBuffer_Points * point);
+
+            Print("  Breakeven Buffer: ", BreakevenBuffer_Points, " points");
+            Print("  New Stop Loss: ", DoubleToString(breakeven_price, _Digits));
             Print("=================================================");
 
             MqlTradeRequest request = {};
@@ -359,14 +499,14 @@ void ManagePosition(ulong ticket)
             request.action = TRADE_ACTION_SLTP;
             request.symbol = _Symbol;
             request.position = ticket;
-            request.sl = NormalizeDouble(position_open_price, _Digits);
+            request.sl = NormalizeDouble(breakeven_price, _Digits);
             request.tp = current_tp;
 
             if(OrderSend(request, result))
             {
                 buy_at_breakeven = true;
                 buy_breakeven_reached_price = current_price;
-                Print("SUCCESS: Stop Loss moved to breakeven at ", DoubleToString(position_open_price, _Digits));
+                Print("SUCCESS: Stop Loss moved to breakeven + ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
                 Print("Wait trigger price: ", DoubleToString(buy_breakeven_reached_price + (current_R * WaitPeriod_R), _Digits));
             }
@@ -411,7 +551,14 @@ void ManagePosition(ulong ticket)
             Print("  Open Price: ", DoubleToString(position_open_price, _Digits));
             Print("  Current Price: ", DoubleToString(current_price, _Digits));
             Print("  Profit: ", DoubleToString(profit_in_R, 2), " R");
-            Print("  Moving Stop Loss to Breakeven");
+            Print("  Moving Stop Loss to Breakeven with buffer");
+
+            //--- Calculate breakeven price with buffer
+            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            double breakeven_price = position_open_price - (BreakevenBuffer_Points * point);
+
+            Print("  Breakeven Buffer: ", BreakevenBuffer_Points, " points");
+            Print("  New Stop Loss: ", DoubleToString(breakeven_price, _Digits));
             Print("=================================================");
 
             MqlTradeRequest request = {};
@@ -420,14 +567,14 @@ void ManagePosition(ulong ticket)
             request.action = TRADE_ACTION_SLTP;
             request.symbol = _Symbol;
             request.position = ticket;
-            request.sl = NormalizeDouble(position_open_price, _Digits);
+            request.sl = NormalizeDouble(breakeven_price, _Digits);
             request.tp = current_tp;
 
             if(OrderSend(request, result))
             {
                 sell_at_breakeven = true;
                 sell_breakeven_reached_price = current_price;
-                Print("SUCCESS: Stop Loss moved to breakeven at ", DoubleToString(position_open_price, _Digits));
+                Print("SUCCESS: Stop Loss moved to breakeven - ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
                 Print("Wait trigger price: ", DoubleToString(sell_breakeven_reached_price - (current_R * WaitPeriod_R), _Digits));
             }
