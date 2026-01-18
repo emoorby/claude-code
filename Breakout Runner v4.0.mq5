@@ -506,6 +506,31 @@ void PlacePendingOrders()
 
     //--- Place Sell Stop order
     Print("--- Placing Sell Stop Order ---");
+
+    //--- Refresh current price to handle market movement
+    double current_bid_for_sell = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    Print("Current Bid (refreshed): ", DoubleToString(current_bid_for_sell, _Digits));
+
+    //--- Validate Sell Stop is below current Bid
+    if(sell_stop_price >= current_bid_for_sell)
+    {
+        Print("WARNING: Sell Stop price (", DoubleToString(sell_stop_price, _Digits), ") >= Current Bid (", DoubleToString(current_bid_for_sell, _Digits), ")");
+        Print("Price moved up since calculation. Recalculating Sell Stop price...");
+
+        // Recalculate Sell Stop to be below current Bid
+        sell_stop_price = current_bid_for_sell - half_R;
+        sell_sl = sell_stop_price + stop_loss_distance;
+        sell_tp = sell_stop_price - (current_R * TakeProfit_R);
+
+        // Re-normalize
+        sell_stop_price = NormalizeDouble(sell_stop_price, _Digits);
+        sell_sl = NormalizeDouble(sell_sl, _Digits);
+        sell_tp = NormalizeDouble(sell_tp, _Digits);
+
+        Print("Adjusted Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits));
+        Print("Adjusted SL: ", DoubleToString(sell_sl, _Digits), ", TP: ", DoubleToString(sell_tp, _Digits));
+    }
+
     request.type = ORDER_TYPE_SELL_STOP;
     request.price = sell_stop_price;
     request.sl = sell_sl;
