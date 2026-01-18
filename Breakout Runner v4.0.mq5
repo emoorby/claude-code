@@ -35,10 +35,18 @@ int atr_handle;
 bool orders_placed_today = false;
 datetime last_order_date = 0;
 double current_R = 0;
-bool buy_at_breakeven = false;
-bool sell_at_breakeven = false;
-double buy_breakeven_reached_price = 0;
-double sell_breakeven_reached_price = 0;
+
+//--- Position tracking structures
+struct PositionTracking
+{
+    ulong ticket;
+    double entry_R;                    // R value when position was opened
+    bool at_breakeven;                 // Whether position has moved to breakeven
+    double breakeven_reached_price;    // Price when breakeven was reached
+};
+
+PositionTracking tracked_positions[];
+int tracked_positions_count = 0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -102,11 +110,64 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    //--- Clean up tracking for any closed positions
+    CleanupClosedPositions();
+
     //--- Check if it's time to place orders
     CheckAndPlaceOrders();
 
     //--- Manage existing positions
     ManagePositions();
+}
+
+//+------------------------------------------------------------------+
+//| Add position to tracking                                         |
+//+------------------------------------------------------------------+
+void AddPositionTracking(ulong ticket, double entry_R_value)
+{
+    ArrayResize(tracked_positions, tracked_positions_count + 1);
+    tracked_positions[tracked_positions_count].ticket = ticket;
+    tracked_positions[tracked_positions_count].entry_R = entry_R_value;
+    tracked_positions[tracked_positions_count].at_breakeven = false;
+    tracked_positions[tracked_positions_count].breakeven_reached_price = 0;
+    tracked_positions_count++;
+
+    Print("Position tracking added: Ticket ", ticket, ", Entry R: ", DoubleToString(entry_R_value, _Digits));
+}
+
+//+------------------------------------------------------------------+
+//| Get position tracking index                                      |
+//+------------------------------------------------------------------+
+int GetPositionTrackingIndex(ulong ticket)
+{
+    for(int i = 0; i < tracked_positions_count; i++)
+    {
+        if(tracked_positions[i].ticket == ticket)
+            return i;
+    }
+    return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Clean up closed positions from tracking                          |
+//+------------------------------------------------------------------+
+void CleanupClosedPositions()
+{
+    for(int i = tracked_positions_count - 1; i >= 0; i--)
+    {
+        if(!PositionSelectByTicket(tracked_positions[i].ticket))
+        {
+            Print("Removing closed position from tracking: Ticket ", tracked_positions[i].ticket);
+
+            // Shift array elements
+            for(int j = i; j < tracked_positions_count - 1; j++)
+            {
+                tracked_positions[j] = tracked_positions[j + 1];
+            }
+            tracked_positions_count--;
+            ArrayResize(tracked_positions, tracked_positions_count);
+        }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -262,12 +323,23 @@ void PlacePendingOrders()
 {
     Print("--- Starting Order Placement Process ---");
 
-    //--- Reset breakeven flags for new trading day
-    buy_at_breakeven = false;
-    sell_at_breakeven = false;
-    buy_breakeven_reached_price = 0;
-    sell_breakeven_reached_price = 0;
-    Print("Breakeven flags reset for new trading day");
+    //--- Check for existing open positions
+    int existing_positions = 0;
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(PositionGetTicket(i) > 0 &&
+           PositionGetString(POSITION_SYMBOL) == _Symbol &&
+           PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+        {
+            existing_positions++;
+        }
+    }
+
+    if(existing_positions > 0)
+    {
+        Print("NOTE: ", existing_positions, " position(s) from previous day(s) still open");
+        Print("Position tracking will be preserved for existing positions");
+    }
 
     //--- Delete any existing pending orders first
     DeletePendingOrders();
@@ -540,23 +612,36 @@ void ManagePosition(ulong ticket)
     long position_type = PositionGetInteger(POSITION_TYPE);
     double current_price;
 
+    //--- Get or create tracking for this position
+    int tracking_index = GetPositionTrackingIndex(ticket);
+    if(tracking_index < 0)
+    {
+        // Position not tracked yet (opened before EA started or from previous session)
+        if(current_R <= 0)
+        {
+            Print("WARNING: Position ", ticket, " not tracked and no valid R value. Cannot manage position.");
+            return;
+        }
+        Print("Position ", ticket, " not tracked. Adding to tracking with current R: ", DoubleToString(current_R, _Digits));
+        AddPositionTracking(ticket, current_R);
+        tracking_index = GetPositionTrackingIndex(ticket);
+    }
+
+    //--- Get position-specific tracking data
+    double position_R = tracked_positions[tracking_index].entry_R;
+    bool position_at_breakeven = tracked_positions[tracking_index].at_breakeven;
+    double position_breakeven_price = tracked_positions[tracking_index].breakeven_reached_price;
+
     if(position_type == POSITION_TYPE_BUY)
     {
         current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-        //--- Validate R value (set when orders were placed today)
-        if(current_R <= 0)
-        {
-            Print("ERROR: Invalid R value (", current_R, "), cannot manage position. Orders may not have been placed yet today.");
-            return;
-        }
-
-        //--- Calculate profit in terms of R (using R from order placement time)
+        //--- Calculate profit in terms of R (using R from when position was opened)
         double profit_points = current_price - position_open_price;
-        double profit_in_R = profit_points / current_R;
+        double profit_in_R = profit_points / position_R;
 
         //--- Check if we need to move to breakeven
-        if(!buy_at_breakeven && profit_in_R >= BreakevenTrigger_R)
+        if(!position_at_breakeven && profit_in_R >= BreakevenTrigger_R)
         {
             Print("=================================================");
             Print("BUY POSITION BREAKEVEN TRIGGER REACHED");
@@ -564,6 +649,7 @@ void ManagePosition(ulong ticket)
             Print("  Open Price: ", DoubleToString(position_open_price, _Digits));
             Print("  Current Price: ", DoubleToString(current_price, _Digits));
             Print("  Profit: ", DoubleToString(profit_in_R, 2), " R");
+            Print("  Position's R value: ", DoubleToString(position_R, _Digits));
             Print("  Moving Stop Loss to Breakeven with buffer");
 
             //--- Calculate breakeven price with buffer
@@ -585,11 +671,13 @@ void ManagePosition(ulong ticket)
 
             if(OrderSend(request, result))
             {
-                buy_at_breakeven = true;
-                buy_breakeven_reached_price = current_price;
+                // Update tracking for this position
+                tracked_positions[tracking_index].at_breakeven = true;
+                tracked_positions[tracking_index].breakeven_reached_price = current_price;
+
                 Print("SUCCESS: Stop Loss moved to breakeven + ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
-                Print("Wait trigger price: ", DoubleToString(buy_breakeven_reached_price + (current_R * WaitPeriod_R), _Digits));
+                Print("Wait trigger price: ", DoubleToString(current_price + (position_R * WaitPeriod_R), _Digits));
             }
             else
             {
@@ -600,17 +688,18 @@ void ManagePosition(ulong ticket)
         }
 
         //--- Check wait period after breakeven
-        if(buy_at_breakeven)
+        if(position_at_breakeven)
         {
-            double distance_from_breakeven = current_price - buy_breakeven_reached_price;
-            double distance_in_R = distance_from_breakeven / current_R;
+            double distance_from_breakeven = current_price - position_breakeven_price;
+            double distance_in_R = distance_from_breakeven / position_R;
 
             if(distance_in_R >= WaitPeriod_R)
             {
                 Print("--- BUY POSITION: Wait period completed ---");
+                Print("  Ticket: ", ticket);
                 Print("  Current Price: ", DoubleToString(current_price, _Digits));
                 Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
-                Print("  Today's R (set at order placement): ", DoubleToString(current_R, _Digits));
+                Print("  Position's R value: ", DoubleToString(position_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
                 //--- Future functionality will be added here
             }
@@ -620,19 +709,12 @@ void ManagePosition(ulong ticket)
     {
         current_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-        //--- Validate R value (set when orders were placed today)
-        if(current_R <= 0)
-        {
-            Print("ERROR: Invalid R value (", current_R, "), cannot manage position. Orders may not have been placed yet today.");
-            return;
-        }
-
-        //--- Calculate profit in terms of R (using R from order placement time)
+        //--- Calculate profit in terms of R (using R from when position was opened)
         double profit_points = position_open_price - current_price;
-        double profit_in_R = profit_points / current_R;
+        double profit_in_R = profit_points / position_R;
 
         //--- Check if we need to move to breakeven
-        if(!sell_at_breakeven && profit_in_R >= BreakevenTrigger_R)
+        if(!position_at_breakeven && profit_in_R >= BreakevenTrigger_R)
         {
             Print("=================================================");
             Print("SELL POSITION BREAKEVEN TRIGGER REACHED");
@@ -640,6 +722,7 @@ void ManagePosition(ulong ticket)
             Print("  Open Price: ", DoubleToString(position_open_price, _Digits));
             Print("  Current Price: ", DoubleToString(current_price, _Digits));
             Print("  Profit: ", DoubleToString(profit_in_R, 2), " R");
+            Print("  Position's R value: ", DoubleToString(position_R, _Digits));
             Print("  Moving Stop Loss to Breakeven with buffer");
 
             //--- Calculate breakeven price with buffer
@@ -661,11 +744,13 @@ void ManagePosition(ulong ticket)
 
             if(OrderSend(request, result))
             {
-                sell_at_breakeven = true;
-                sell_breakeven_reached_price = current_price;
+                // Update tracking for this position
+                tracked_positions[tracking_index].at_breakeven = true;
+                tracked_positions[tracking_index].breakeven_reached_price = current_price;
+
                 Print("SUCCESS: Stop Loss moved to breakeven - ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
-                Print("Wait trigger price: ", DoubleToString(sell_breakeven_reached_price - (current_R * WaitPeriod_R), _Digits));
+                Print("Wait trigger price: ", DoubleToString(current_price - (position_R * WaitPeriod_R), _Digits));
             }
             else
             {
@@ -676,17 +761,18 @@ void ManagePosition(ulong ticket)
         }
 
         //--- Check wait period after breakeven
-        if(sell_at_breakeven)
+        if(position_at_breakeven)
         {
-            double distance_from_breakeven = sell_breakeven_reached_price - current_price;
-            double distance_in_R = distance_from_breakeven / current_R;
+            double distance_from_breakeven = position_breakeven_price - current_price;
+            double distance_in_R = distance_from_breakeven / position_R;
 
             if(distance_in_R >= WaitPeriod_R)
             {
                 Print("--- SELL POSITION: Wait period completed ---");
+                Print("  Ticket: ", ticket);
                 Print("  Current Price: ", DoubleToString(current_price, _Digits));
                 Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
-                Print("  Today's R (set at order placement): ", DoubleToString(current_R, _Digits));
+                Print("  Position's R value: ", DoubleToString(position_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
                 //--- Future functionality will be added here
             }
