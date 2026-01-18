@@ -16,6 +16,7 @@ enum ENUM_LOT_MODE
 
 //--- Input parameters
 input string    OrderTime = "09:00";                    // Time to place orders (HH:MM)
+input string    OrderDeleteTime = "22:00";              // Time to delete pending orders (HH:MM)
 input int       ATR_Period = 10;                        // ATR Period
 input double    ATR_Multiplier = 3.0;                   // ATR Multiplier
 input ENUM_LOT_MODE LotSizingMode = LOT_MODE_RISK_PERCENT;  // Lot Sizing Mode
@@ -33,7 +34,9 @@ input int       MagicNumber = 240100;                   // Magic Number
 //--- Global variables
 int atr_handle;
 bool orders_placed_today = false;
+bool orders_deleted_today = false;
 datetime last_order_date = 0;
+datetime last_delete_date = 0;
 double current_R = 0;
 
 //--- Position tracking structures
@@ -68,7 +71,8 @@ int OnInit()
 
     Print("ATR Indicator created successfully");
     Print("Settings:");
-    Print("  - Order Time: ", OrderTime);
+    Print("  - Order Placement Time: ", OrderTime);
+    Print("  - Order Delete Time: ", OrderDeleteTime);
     Print("  - ATR Period: ", ATR_Period);
     Print("  - ATR Multiplier: ", ATR_Multiplier);
     Print("  - Lot Sizing Mode: ", (LotSizingMode == LOT_MODE_FIXED ? "Fixed Lot Size" : "Risk Percentage"));
@@ -116,6 +120,9 @@ void OnTick()
 
     //--- Check if it's time to place orders
     CheckAndPlaceOrders();
+
+    //--- Check if it's time to delete pending orders
+    CheckAndDeleteOrders();
 
     //--- Manage existing positions
     ManagePositions();
@@ -319,6 +326,52 @@ void CheckAndPlaceOrders()
 }
 
 //+------------------------------------------------------------------+
+//| Check if it's time to delete pending orders                      |
+//+------------------------------------------------------------------+
+void CheckAndDeleteOrders()
+{
+    //--- Get current time
+    datetime current_time = TimeCurrent();
+    MqlDateTime dt;
+    TimeToStruct(current_time, dt);
+
+    //--- Check if we're on a new day
+    datetime current_date = StringToTime(TimeToString(current_time, TIME_DATE));
+    if(current_date > last_delete_date)
+    {
+        orders_deleted_today = false;
+        last_delete_date = current_date;
+    }
+
+    //--- Check if orders already deleted today
+    if(orders_deleted_today)
+        return;
+
+    //--- Parse order delete time
+    string time_parts[];
+    int splits = StringSplit(OrderDeleteTime, ':', time_parts);
+    if(splits != 2)
+    {
+        Print("ERROR: Invalid OrderDeleteTime format. Use HH:MM");
+        return;
+    }
+
+    int delete_hour = (int)StringToInteger(time_parts[0]);
+    int delete_minute = (int)StringToInteger(time_parts[1]);
+
+    //--- Check if current time matches delete time
+    if(dt.hour == delete_hour && dt.min == delete_minute)
+    {
+        Print("=================================================");
+        Print("ORDER DELETE TIME REACHED: ", TimeToString(current_time, TIME_DATE|TIME_MINUTES));
+        Print("Deleting all pending orders for the day");
+        Print("=================================================");
+        DeletePendingOrders();
+        orders_deleted_today = true;
+    }
+}
+
+//+------------------------------------------------------------------+
 //| Place pending orders                                             |
 //+------------------------------------------------------------------+
 void PlacePendingOrders()
@@ -507,29 +560,25 @@ void PlacePendingOrders()
     //--- Place Sell Stop order
     Print("--- Placing Sell Stop Order ---");
 
-    //--- Refresh current price to handle market movement
+    //--- CRITICAL: Refresh price at LAST possible moment to handle market movement
     double current_bid_for_sell = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    Print("Current Bid (refreshed): ", DoubleToString(current_bid_for_sell, _Digits));
+    double safety_buffer = point * 2; // 2 point buffer to ensure order validity
 
-    //--- Validate Sell Stop is below current Bid
-    if(sell_stop_price >= current_bid_for_sell)
-    {
-        Print("WARNING: Sell Stop price (", DoubleToString(sell_stop_price, _Digits), ") >= Current Bid (", DoubleToString(current_bid_for_sell, _Digits), ")");
-        Print("Price moved up since calculation. Recalculating Sell Stop price...");
+    Print("Current Bid (refreshed just before order): ", DoubleToString(current_bid_for_sell, _Digits));
 
-        // Recalculate Sell Stop to be below current Bid
-        sell_stop_price = current_bid_for_sell - half_R;
-        sell_sl = sell_stop_price + stop_loss_distance;
-        sell_tp = sell_stop_price - (current_R * TakeProfit_R);
+    //--- Always recalculate Sell Stop based on fresh price to handle backtesting delays
+    sell_stop_price = current_bid_for_sell - half_R - safety_buffer;
+    sell_sl = sell_stop_price + stop_loss_distance;
+    sell_tp = sell_stop_price - (current_R * TakeProfit_R);
 
-        // Re-normalize
-        sell_stop_price = NormalizeDouble(sell_stop_price, _Digits);
-        sell_sl = NormalizeDouble(sell_sl, _Digits);
-        sell_tp = NormalizeDouble(sell_tp, _Digits);
+    // Re-normalize all prices
+    sell_stop_price = NormalizeDouble(sell_stop_price, _Digits);
+    sell_sl = NormalizeDouble(sell_sl, _Digits);
+    sell_tp = NormalizeDouble(sell_tp, _Digits);
 
-        Print("Adjusted Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits));
-        Print("Adjusted SL: ", DoubleToString(sell_sl, _Digits), ", TP: ", DoubleToString(sell_tp, _Digits));
-    }
+    Print("Recalculated Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits), " (Bid - R/2 - buffer)");
+    Print("Sell Stop SL: ", DoubleToString(sell_sl, _Digits), ", TP: ", DoubleToString(sell_tp, _Digits));
+    Print("Safety buffer applied: ", DoubleToString(safety_buffer, _Digits));
 
     request.type = ORDER_TYPE_SELL_STOP;
     request.price = sell_stop_price;
