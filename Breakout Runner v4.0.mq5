@@ -126,9 +126,10 @@ double CalculateLotSize(double stop_loss_distance)
     {
         Print("--- Lot Size Calculation (Risk Percentage Mode) ---");
 
-        //--- Get account balance
+        //--- Get account balance and currency
         double account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-        Print("  Account Balance: ", DoubleToString(account_balance, 2));
+        string account_currency = AccountInfoString(ACCOUNT_CURRENCY);
+        Print("  Account Balance: ", DoubleToString(account_balance, 2), " ", account_currency);
 
         //--- Calculate risk amount in account currency
         double risk_amount = account_balance * RiskPercent / 100.0;
@@ -138,29 +139,41 @@ double CalculateLotSize(double stop_loss_distance)
         double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
         double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
         double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+        string profit_currency = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_PROFIT);
+        string base_currency = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_BASE);
 
         Print("  Symbol Tick Size: ", tick_size);
-        Print("  Symbol Tick Value: ", tick_value);
+        Print("  Symbol Tick Value: ", tick_value, " (in account currency)");
         Print("  Symbol Point: ", point);
+        Print("  Symbol Contract Size: ", contract_size);
+        Print("  Symbol Base Currency: ", base_currency);
+        Print("  Symbol Profit Currency: ", profit_currency);
 
         //--- Calculate stop loss in points
         double sl_points = stop_loss_distance / point;
         Print("  Stop Loss Distance: ", DoubleToString(stop_loss_distance, _Digits));
         Print("  Stop Loss Points: ", DoubleToString(sl_points, 0));
 
-        //--- Calculate point value
-        double point_value = tick_value / tick_size * point;
-        Print("  Point Value: ", point_value);
+        //--- Calculate point value in account currency
+        //--- For CFDs/Indices: tick_value is already in account currency
+        //--- For Forex: tick_value is also in account currency
+        double point_value = (tick_value / tick_size) * point;
+        Print("  Point Value (per 1 lot): ", DoubleToString(point_value, 5), " ", account_currency);
+
+        //--- Calculate money at risk per lot
+        double money_at_risk_per_lot = sl_points * point_value;
+        Print("  Money at Risk per 1 lot: ", DoubleToString(money_at_risk_per_lot, 2), " ", account_currency);
 
         //--- Calculate lot size
-        if(sl_points > 0 && point_value > 0)
+        if(money_at_risk_per_lot > 0)
         {
-            lot_size = risk_amount / (sl_points * point_value);
-            Print("  Calculated Lot Size: ", DoubleToString(lot_size, 2));
+            lot_size = risk_amount / money_at_risk_per_lot;
+            Print("  Calculated Lot Size: ", DoubleToString(lot_size, 2), " (Risk/MoneyPerLot)");
         }
         else
         {
-            Print("ERROR: Invalid calculation parameters");
+            Print("ERROR: Invalid calculation - money at risk per lot is zero or negative");
             lot_size = FixedLotSize; // Fallback to fixed lot size
             Print("  Using fallback Fixed Lot Size: ", lot_size);
         }
@@ -269,25 +282,56 @@ void PlacePendingOrders()
     current_R = atr_value * ATR_Multiplier;
     Print("R Calculation: ATR(", DoubleToString(atr_value, _Digits), ") * Multiplier(", ATR_Multiplier, ") = ", DoubleToString(current_R, _Digits));
 
-    //--- Get current price
+    //--- Get current price and broker requirements
     double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    Print("Current Price: ", DoubleToString(current_price, _Digits));
+    double ask_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    long stops_level = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+    long freeze_level = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+    Print("Current Bid: ", DoubleToString(current_price, _Digits));
+    Print("Current Ask: ", DoubleToString(ask_price, _Digits));
+    Print("Broker Stops Level: ", stops_level, " points");
+    Print("Broker Freeze Level: ", freeze_level, " points");
 
     //--- Calculate order prices (R/2 from current price)
     double half_R = current_R / 2.0;
-    double buy_stop_price = current_price + half_R;
+    double buy_stop_price = ask_price + half_R;
     double sell_stop_price = current_price - half_R;
 
     Print("Half R: ", DoubleToString(half_R, _Digits));
-    Print("Buy Stop Price: ", DoubleToString(buy_stop_price, _Digits), " (Current + R/2)");
-    Print("Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits), " (Current - R/2)");
+    Print("Buy Stop Price: ", DoubleToString(buy_stop_price, _Digits), " (Ask + R/2)");
+    Print("Sell Stop Price: ", DoubleToString(sell_stop_price, _Digits), " (Bid - R/2)");
+
+    //--- Validate pending order distance from current price
+    double buy_distance_points = (buy_stop_price - ask_price) / point;
+    double sell_distance_points = (current_price - sell_stop_price) / point;
+
+    Print("Buy Stop Distance: ", DoubleToString(buy_distance_points, 0), " points from Ask");
+    Print("Sell Stop Distance: ", DoubleToString(sell_distance_points, 0), " points from Bid");
+
+    if(stops_level > 0)
+    {
+        if(buy_distance_points < stops_level)
+        {
+            Print("WARNING: Buy Stop distance (", DoubleToString(buy_distance_points, 0), ") < Broker minimum (", stops_level, ")");
+            Print("Adjusting Buy Stop price to meet broker requirements");
+            buy_stop_price = ask_price + (stops_level * point);
+        }
+
+        if(sell_distance_points < stops_level)
+        {
+            Print("WARNING: Sell Stop distance (", DoubleToString(sell_distance_points, 0), ") < Broker minimum (", stops_level, ")");
+            Print("Adjusting Sell Stop price to meet broker requirements");
+            sell_stop_price = current_price - (stops_level * point);
+        }
+    }
 
     //--- Calculate stop loss distance
     double stop_loss_distance = current_R * StopLoss_R;
     Print("Stop Loss Distance: ", DoubleToString(stop_loss_distance, _Digits), " (", StopLoss_R, " R)");
 
     //--- Validate minimum stop loss
-    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
     double sl_points = stop_loss_distance / point;
     Print("Stop Loss in Points: ", DoubleToString(sl_points, 0));
 
@@ -311,6 +355,28 @@ void PlacePendingOrders()
 
     Print("Buy Stop - SL: ", DoubleToString(buy_sl, _Digits), ", TP: ", DoubleToString(buy_tp, _Digits));
     Print("Sell Stop - SL: ", DoubleToString(sell_sl, _Digits), ", TP: ", DoubleToString(sell_tp, _Digits));
+
+    //--- Validate SL/TP distances for pending orders
+    if(stops_level > 0)
+    {
+        double buy_sl_distance = (buy_stop_price - buy_sl) / point;
+        double buy_tp_distance = (buy_tp - buy_stop_price) / point;
+        double sell_sl_distance = (sell_sl - sell_stop_price) / point;
+        double sell_tp_distance = (sell_stop_price - sell_tp) / point;
+
+        Print("Validating SL/TP distances against broker minimum (", stops_level, " points)");
+        Print("  Buy SL distance: ", DoubleToString(buy_sl_distance, 0), " points");
+        Print("  Buy TP distance: ", DoubleToString(buy_tp_distance, 0), " points");
+        Print("  Sell SL distance: ", DoubleToString(sell_sl_distance, 0), " points");
+        Print("  Sell TP distance: ", DoubleToString(sell_tp_distance, 0), " points");
+
+        if(buy_sl_distance < stops_level || buy_tp_distance < stops_level ||
+           sell_sl_distance < stops_level || sell_tp_distance < stops_level)
+        {
+            Print("WARNING: SL/TP distances may not meet broker requirements");
+            Print("Consider increasing ATR_Multiplier or StopLoss_R/TakeProfit_R values");
+        }
+    }
 
     //--- Calculate lot size
     double calculated_lot_size = CalculateLotSize(stop_loss_distance);
