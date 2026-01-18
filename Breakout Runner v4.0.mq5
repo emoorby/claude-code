@@ -110,6 +110,26 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Get current R value (recalculate from ATR)                       |
+//+------------------------------------------------------------------+
+double GetCurrentR()
+{
+    double atr_buffer[];
+    ArraySetAsSeries(atr_buffer, true);
+
+    if(CopyBuffer(atr_handle, 0, 0, 1, atr_buffer) < 1)
+    {
+        Print("WARNING: Failed to get ATR for R calculation, using stored value: ", current_R);
+        return current_R;
+    }
+
+    double atr_value = atr_buffer[0];
+    double calculated_R = atr_value * ATR_Multiplier;
+
+    return calculated_R;
+}
+
+//+------------------------------------------------------------------+
 //| Calculate lot size based on risk                                |
 //+------------------------------------------------------------------+
 double CalculateLotSize(double stop_loss_distance)
@@ -536,9 +556,17 @@ void ManagePosition(ulong ticket)
     {
         current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
+        //--- Get current R value
+        double active_R = GetCurrentR();
+        if(active_R <= 0)
+        {
+            Print("ERROR: Invalid R value (", active_R, "), cannot manage position");
+            return;
+        }
+
         //--- Calculate profit in terms of R
         double profit_points = current_price - position_open_price;
-        double profit_in_R = profit_points / current_R;
+        double profit_in_R = profit_points / active_R;
 
         //--- Check if we need to move to breakeven
         if(!buy_at_breakeven && profit_in_R >= BreakevenTrigger_R)
@@ -574,7 +602,7 @@ void ManagePosition(ulong ticket)
                 buy_breakeven_reached_price = current_price;
                 Print("SUCCESS: Stop Loss moved to breakeven + ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
-                Print("Wait trigger price: ", DoubleToString(buy_breakeven_reached_price + (current_R * WaitPeriod_R), _Digits));
+                Print("Wait trigger price: ", DoubleToString(buy_breakeven_reached_price + (active_R * WaitPeriod_R), _Digits));
             }
             else
             {
@@ -588,13 +616,14 @@ void ManagePosition(ulong ticket)
         if(buy_at_breakeven)
         {
             double distance_from_breakeven = current_price - buy_breakeven_reached_price;
-            double distance_in_R = distance_from_breakeven / current_R;
+            double distance_in_R = distance_from_breakeven / active_R;
 
             if(distance_in_R >= WaitPeriod_R)
             {
                 Print("--- BUY POSITION: Wait period completed ---");
                 Print("  Current Price: ", DoubleToString(current_price, _Digits));
-                Print("  Distance from breakeven trigger: ", DoubleToString(distance_in_R, 2), " R");
+                Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
+                Print("  Current ATR-based R: ", DoubleToString(active_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
                 //--- Future functionality will be added here
             }
@@ -604,9 +633,17 @@ void ManagePosition(ulong ticket)
     {
         current_price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
+        //--- Get current R value
+        double active_R = GetCurrentR();
+        if(active_R <= 0)
+        {
+            Print("ERROR: Invalid R value (", active_R, "), cannot manage position");
+            return;
+        }
+
         //--- Calculate profit in terms of R
         double profit_points = position_open_price - current_price;
-        double profit_in_R = profit_points / current_R;
+        double profit_in_R = profit_points / active_R;
 
         //--- Check if we need to move to breakeven
         if(!sell_at_breakeven && profit_in_R >= BreakevenTrigger_R)
@@ -642,7 +679,7 @@ void ManagePosition(ulong ticket)
                 sell_breakeven_reached_price = current_price;
                 Print("SUCCESS: Stop Loss moved to breakeven - ", BreakevenBuffer_Points, " points at ", DoubleToString(breakeven_price, _Digits));
                 Print("Waiting for price to move ", WaitPeriod_R, " R before further action");
-                Print("Wait trigger price: ", DoubleToString(sell_breakeven_reached_price - (current_R * WaitPeriod_R), _Digits));
+                Print("Wait trigger price: ", DoubleToString(sell_breakeven_reached_price - (active_R * WaitPeriod_R), _Digits));
             }
             else
             {
@@ -656,13 +693,14 @@ void ManagePosition(ulong ticket)
         if(sell_at_breakeven)
         {
             double distance_from_breakeven = sell_breakeven_reached_price - current_price;
-            double distance_in_R = distance_from_breakeven / current_R;
+            double distance_in_R = distance_from_breakeven / active_R;
 
             if(distance_in_R >= WaitPeriod_R)
             {
                 Print("--- SELL POSITION: Wait period completed ---");
                 Print("  Current Price: ", DoubleToString(current_price, _Digits));
-                Print("  Distance from breakeven trigger: ", DoubleToString(distance_in_R, 2), " R");
+                Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
+                Print("  Current ATR-based R: ", DoubleToString(active_R, _Digits));
                 Print("  Ready for additional actions (to be implemented)");
                 //--- Future functionality will be added here
             }
