@@ -612,6 +612,7 @@ double GetATRTrendIndValue(int pos_index, int timeframe_level, ENUM_POSITION_TYP
     {
         if(tracked_positions[pos_index].cached_atr_values[timeframe_level] > 0)
         {
+            Print("  Using cached ATR_Trend_Ind value for ", GetTimeframeName(timeframe_level), ": ", tracked_positions[pos_index].cached_atr_values[timeframe_level]);
             return tracked_positions[pos_index].cached_atr_values[timeframe_level];
         }
     }
@@ -620,7 +621,7 @@ double GetATRTrendIndValue(int pos_index, int timeframe_level, ENUM_POSITION_TYP
     int handle = GetATRTrendHandle(timeframe_level);
     if(handle == INVALID_HANDLE)
     {
-        Print("ERROR: Invalid handle for timeframe level ", timeframe_level);
+        Print("ERROR: Invalid ATR_Trend_Ind handle for timeframe level ", timeframe_level);
         return 0;
     }
 
@@ -629,13 +630,15 @@ double GetATRTrendIndValue(int pos_index, int timeframe_level, ENUM_POSITION_TYP
     // Buffer 3 = BUY stops (line below price)
     int target_buffer = (pos_type == POSITION_TYPE_BUY) ? 3 : 2;
 
+    Print("  Fetching ATR_Trend_Ind value - Timeframe: ", GetTimeframeName(timeframe_level), ", Buffer: ", target_buffer, ", PosType: ", (pos_type == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+
     // Look back up to 50 bars to find a valid ATR value
     double values[];
     ArraySetAsSeries(values, true);
 
     if(CopyBuffer(handle, target_buffer, 0, 50, values) <= 0)
     {
-        Print("ERROR: Failed to copy buffer for timeframe level ", timeframe_level);
+        Print("ERROR: Failed to copy ATR_Trend_Ind buffer for timeframe level ", timeframe_level);
         return 0;
     }
 
@@ -644,6 +647,7 @@ double GetATRTrendIndValue(int pos_index, int timeframe_level, ENUM_POSITION_TYP
     {
         if(values[i] > 0 && values[i] != EMPTY_VALUE)
         {
+            Print("  Found valid ATR_Trend_Ind value at bar ", i, ": ", DoubleToString(values[i], _Digits));
             // Cache the value
             if(pos_index >= 0 && pos_index < tracked_positions_count)
             {
