@@ -1201,6 +1201,9 @@ void ManagePosition(ulong ticket)
                                     Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
                                     Print("  Old SL: ", DoubleToString(current_sl, _Digits));
 
+                                    // Update local SL variable to reflect the new stop loss
+                                    current_sl = atr_stop_value;
+
                                     // Progress to next timeframe if not at max
                                     if(current_timeframe_level < max_timeframe_level)
                                     {
@@ -1389,6 +1392,9 @@ void ManagePosition(ulong ticket)
                                     Print("  Timeframe: ", GetTimeframeName(current_timeframe_level));
                                     Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
                                     Print("  Old SL: ", DoubleToString(current_sl, _Digits));
+
+                                    // Update local SL variable to reflect the new stop loss
+                                    current_sl = atr_stop_value;
 
                                     // Progress to next timeframe if not at max
                                     if(current_timeframe_level < max_timeframe_level)
