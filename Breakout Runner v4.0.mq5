@@ -1178,6 +1178,9 @@ void ManagePosition(ulong ticket)
                     {
                         tracked_positions[tracking_index].last_bar_time = current_bar_time;
 
+                        // Clear cached value for current timeframe to force fresh fetch
+                        tracked_positions[tracking_index].cached_atr_values[current_timeframe_level] = 0;
+
                         // Get ATR_Trend_Ind value for current timeframe
                         double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_BUY);
 
@@ -1369,6 +1372,9 @@ void ManagePosition(ulong ticket)
                     if(current_bar_time != tracked_positions[tracking_index].last_bar_time)
                     {
                         tracked_positions[tracking_index].last_bar_time = current_bar_time;
+
+                        // Clear cached value for current timeframe to force fresh fetch
+                        tracked_positions[tracking_index].cached_atr_values[current_timeframe_level] = 0;
 
                         // Get ATR_Trend_Ind value for current timeframe
                         double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_SELL);
