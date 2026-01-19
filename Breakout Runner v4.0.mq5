@@ -45,23 +45,20 @@ input int       MagicNumber = 240100;                   // Magic Number
 // Advanced Trade Management
 input group "=== Advanced Trade Management ==="
 input double   BaselineBalance = 10000.0;               // Baseline Balance
-input double   ATRModifier = 1.0;                       // ATR Modifier for trailing
-input ENUM_MAX_TIMEFRAME MaxTimeframe = MAX_TF_D1;      // Maximum Timeframe for Progression
+input int      ATRTrendPeriod = 10;                     // ATR Period for ATR_Trend_Ind (Above Baseline)
+input double   ATRModifier = 3.0;                       // ATR Modifier for ATR_Trend_Ind (Above Baseline)
+input ENUM_MAX_TIMEFRAME MaxTimeframe = MAX_TF_D1;      // Maximum Timeframe for Progression (Above Baseline)
+input int      BelowBaselineTrailPoints = 25;           // Trailing Stop Points (Below Baseline)
 
-// ADX Volatility Filter
-input group "=== ADX Volatility Filter ==="
-input bool     EnableADXFilter = false;                 // Enable ADX Volatility Filter
-input bool     Filter_CheckATRIncreasing = true;        // Check 1: ATR Must Be Increasing
-input bool     Filter_CheckSignificantIncrease = true;  // Check 2: ATR Increase Must Be Significant
-input bool     Filter_CheckDirectionalMomentum = true;  // Check 3: Directional Momentum Required
-input int      ATRFilter_RecentCandles = 2;             // Recent Candles (x)
-input int      ATRFilter_EarlierCandles = 3;            // Earlier Candles (y)
-input double   ATRFilter_MinIncreasePercent = 20.0;     // Minimum ATR Increase (% of Earlier ATR)
-input int      DirectionalFilter_Candles = 5;           // Directional Candles to Check
-input int      DirectionalFilter_MinRequired = 4;       // Minimum Directional Candles Required
+// ADX Filter
+input group "=== ADX Filter ==="
+input bool     EnableADXFilter = false;                 // Enable ADX Filter
+input int      ADXPeriod = 10;                          // ADX Period
+input double   MinADXLevel = 15.0;                      // Minimum ADX Level
 
 //--- Global variables
 int atr_handle;
+int adx_handle = INVALID_HANDLE;
 bool orders_placed_today = false;
 bool orders_deleted_today = false;
 datetime last_order_date = 0;
@@ -114,14 +111,23 @@ int OnInit()
 
     Print("ATR Indicator created successfully");
 
+    //--- Create ADX indicator handle
+    adx_handle = iADX(_Symbol, PERIOD_CURRENT, ADXPeriod);
+    if(adx_handle == INVALID_HANDLE)
+    {
+        Print("ERROR: Failed to create ADX indicator handle");
+        return(INIT_FAILED);
+    }
+    Print("ADX Indicator created successfully");
+
     //--- Create ATR_Trend_Ind indicator handles for all timeframes
-    atr_trend_handle_M1 = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_M5 = iCustom(_Symbol, PERIOD_M5, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_M15 = iCustom(_Symbol, PERIOD_M15, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_M30 = iCustom(_Symbol, PERIOD_M30, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_H1 = iCustom(_Symbol, PERIOD_H1, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_H4 = iCustom(_Symbol, PERIOD_H4, "ATR_Trend_Ind", ATR_Period, ATRModifier);
-    atr_trend_handle_D1 = iCustom(_Symbol, PERIOD_D1, "ATR_Trend_Ind", ATR_Period, ATRModifier);
+    atr_trend_handle_M1 = iCustom(_Symbol, PERIOD_M1, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_M5 = iCustom(_Symbol, PERIOD_M5, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_M15 = iCustom(_Symbol, PERIOD_M15, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_M30 = iCustom(_Symbol, PERIOD_M30, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_H1 = iCustom(_Symbol, PERIOD_H1, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_H4 = iCustom(_Symbol, PERIOD_H4, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
+    atr_trend_handle_D1 = iCustom(_Symbol, PERIOD_D1, "ATR_Trend_Ind", ATRTrendPeriod, ATRModifier);
 
     if(atr_trend_handle_M1 == INVALID_HANDLE || atr_trend_handle_M5 == INVALID_HANDLE ||
        atr_trend_handle_M15 == INVALID_HANDLE || atr_trend_handle_M30 == INVALID_HANDLE ||
@@ -162,7 +168,9 @@ int OnInit()
     Print("");
     Print("Advanced Trade Management:");
     Print("  - Baseline Balance: ", BaselineBalance);
-    Print("  - ATR Modifier: ", ATRModifier);
+    Print("  Above Baseline (ATR_Trend_Ind Trailing):");
+    Print("    - ATR Trend Period: ", ATRTrendPeriod);
+    Print("    - ATR Modifier: ", ATRModifier);
     string maxTfStr = "";
     switch(MaxTimeframe)
     {
@@ -174,20 +182,16 @@ int OnInit()
         case MAX_TF_H4: maxTfStr = "H4"; break;
         case MAX_TF_D1: maxTfStr = "D1"; break;
     }
-    Print("  - Max Timeframe: ", maxTfStr);
+    Print("    - Max Timeframe: ", maxTfStr);
+    Print("  Below Baseline (Fixed Points Trailing):");
+    Print("    - Trail Points: ", BelowBaselineTrailPoints);
     Print("");
-    Print("ADX Volatility Filter:");
+    Print("ADX Filter:");
     Print("  - Enabled: ", (EnableADXFilter ? "YES" : "NO"));
     if(EnableADXFilter)
     {
-        Print("  - Check ATR Increasing: ", (Filter_CheckATRIncreasing ? "YES" : "NO"));
-        Print("  - Check Significant Increase: ", (Filter_CheckSignificantIncrease ? "YES" : "NO"));
-        Print("  - Check Directional Momentum: ", (Filter_CheckDirectionalMomentum ? "YES" : "NO"));
-        Print("  - Recent Candles: ", ATRFilter_RecentCandles);
-        Print("  - Earlier Candles: ", ATRFilter_EarlierCandles);
-        Print("  - Min Increase %: ", ATRFilter_MinIncreasePercent);
-        Print("  - Directional Candles: ", DirectionalFilter_Candles);
-        Print("  - Min Required: ", DirectionalFilter_MinRequired);
+        Print("  - ADX Period: ", ADXPeriod);
+        Print("  - Min ADX Level: ", MinADXLevel);
     }
     Print("=================================================");
     Print("Initialization completed successfully");
@@ -209,6 +213,10 @@ void OnDeinit(const int reason)
     //--- Release ATR indicator handle
     if(atr_handle != INVALID_HANDLE)
         IndicatorRelease(atr_handle);
+
+    //--- Release ADX indicator handle
+    if(adx_handle != INVALID_HANDLE)
+        IndicatorRelease(adx_handle);
 
     //--- Release ATR_Trend_Ind indicator handles
     if(atr_trend_handle_M1 != INVALID_HANDLE)
@@ -650,7 +658,7 @@ double GetATRTrendIndValue(int pos_index, int timeframe_level, ENUM_POSITION_TYP
 }
 
 //+------------------------------------------------------------------+
-//| Check ADX Volatility Filter                                      |
+//| Check ADX Filter                                                 |
 //| Returns true if conditions are met (allow order placement)      |
 //+------------------------------------------------------------------+
 bool CheckADXFilter()
@@ -658,96 +666,31 @@ bool CheckADXFilter()
     if(!EnableADXFilter)
         return true;  // Filter disabled, allow placement
 
-    Print("--- Checking ADX Volatility Filter ---");
+    Print("--- Checking ADX Filter ---");
 
-    double atr_values[];
-    ArraySetAsSeries(atr_values, true);
+    double adx_values[];
+    ArraySetAsSeries(adx_values, true);
 
-    // Get enough ATR values for the checks
-    int needed_bars = MathMax(ATRFilter_RecentCandles, ATRFilter_EarlierCandles) + DirectionalFilter_Candles + 5;
-    if(CopyBuffer(atr_handle, 0, 0, needed_bars, atr_values) <= 0)
+    // Get current ADX value (buffer 0 = main ADX line)
+    if(CopyBuffer(adx_handle, 0, 0, 2, adx_values) <= 0)
     {
-        Print("ERROR: Failed to copy ATR buffer for filter check");
+        Print("ERROR: Failed to copy ADX buffer for filter check");
         return false;
     }
 
-    // Check 1: ATR Must Be Increasing (Recent > Earlier)
-    if(Filter_CheckATRIncreasing)
+    double current_adx = adx_values[0];
+    Print("  Current ADX: ", DoubleToString(current_adx, 2));
+    Print("  Min Required: ", DoubleToString(MinADXLevel, 2));
+
+    if(current_adx < MinADXLevel)
     {
-        double recent_atr = 0;
-        for(int i = 0; i < ATRFilter_RecentCandles; i++)
-            recent_atr += atr_values[i];
-        recent_atr /= ATRFilter_RecentCandles;
-
-        double earlier_atr = 0;
-        int earlier_start = ATRFilter_RecentCandles;
-        for(int i = earlier_start; i < earlier_start + ATRFilter_EarlierCandles; i++)
-            earlier_atr += atr_values[i];
-        earlier_atr /= ATRFilter_EarlierCandles;
-
-        Print("Check 1 - ATR Increasing:");
-        Print("  Recent ATR (avg of ", ATRFilter_RecentCandles, " candles): ", recent_atr);
-        Print("  Earlier ATR (avg of ", ATRFilter_EarlierCandles, " candles): ", earlier_atr);
-
-        if(recent_atr <= earlier_atr)
-        {
-            Print("  FAILED: Recent ATR is NOT greater than earlier ATR");
-            return false;
-        }
-        Print("  PASSED: Recent ATR is greater than earlier ATR");
-
-        // Check 2: Significant Increase
-        if(Filter_CheckSignificantIncrease)
-        {
-            double increase = recent_atr - earlier_atr;
-            double min_increase_required = earlier_atr * (ATRFilter_MinIncreasePercent / 100.0);
-
-            Print("Check 2 - Significant Increase:");
-            Print("  ATR Increase: ", increase);
-            Print("  Min Required (", ATRFilter_MinIncreasePercent, "% of earlier): ", min_increase_required);
-
-            if(increase < min_increase_required)
-            {
-                Print("  FAILED: Increase is not significant enough");
-                return false;
-            }
-            Print("  PASSED: Increase is significant");
-        }
+        Print("  FAILED: ADX is below minimum level");
+        Print("ADX filter check FAILED - Skipping order placement");
+        return false;
     }
 
-    // Check 3: Directional Momentum
-    if(Filter_CheckDirectionalMomentum)
-    {
-        Print("Check 3 - Directional Momentum:");
-
-        // Count bullish candles (close > open)
-        int bullish_count = 0;
-        for(int i = 0; i < DirectionalFilter_Candles; i++)
-        {
-            double open = iOpen(_Symbol, PERIOD_CURRENT, i);
-            double close = iClose(_Symbol, PERIOD_CURRENT, i);
-            if(close > open)
-                bullish_count++;
-        }
-
-        int bearish_count = DirectionalFilter_Candles - bullish_count;
-
-        Print("  Bullish candles: ", bullish_count, " / ", DirectionalFilter_Candles);
-        Print("  Bearish candles: ", bearish_count, " / ", DirectionalFilter_Candles);
-        Print("  Min required: ", DirectionalFilter_MinRequired);
-
-        bool has_directional_momentum = (bullish_count >= DirectionalFilter_MinRequired) ||
-                                       (bearish_count >= DirectionalFilter_MinRequired);
-
-        if(!has_directional_momentum)
-        {
-            Print("  FAILED: Not enough directional momentum");
-            return false;
-        }
-        Print("  PASSED: Sufficient directional momentum detected");
-    }
-
-    Print("All ADX filter checks PASSED - Order placement allowed");
+    Print("  PASSED: ADX is above minimum level");
+    Print("ADX filter check PASSED - Order placement allowed");
     return true;
 }
 
@@ -1151,99 +1094,133 @@ void ManagePosition(ulong ticket)
             }
         }
 
-        //--- Check wait period after breakeven
+        //--- Trailing stop management after breakeven
         if(position_at_breakeven)
         {
-            double distance_from_breakeven = current_price - position_breakeven_price;
-            double distance_in_R = distance_from_breakeven / position_R;
-
-            // Activate ATR management when wait period is complete
-            if(distance_in_R >= WaitPeriod_R)
+            // Below Baseline: Fixed points trailing (starts immediately, no wait period)
+            if(tracked_positions[tracking_index].use_below_baseline_method)
             {
                 if(!tracked_positions[tracking_index].wait_period_logged)
                 {
-                    Print("--- BUY POSITION: Wait period completed ---");
+                    Print("--- BUY POSITION: Below Baseline - Starting fixed points trailing ---");
                     Print("  Ticket: ", ticket);
-                    Print("  Current Price: ", DoubleToString(current_price, _Digits));
-                    Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
-                    Print("  Position's R value: ", DoubleToString(position_R, _Digits));
-                    Print("  Activating ATR-based trailing stop management");
-
+                    Print("  Trail Points: ", BelowBaselineTrailPoints);
                     tracked_positions[tracking_index].wait_period_logged = true;
                 }
 
-                // Activate ATR management
-                if(!tracked_positions[tracking_index].atr_management_active)
+                // Calculate trailing stop price
+                double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+                double new_sl = current_price - (BelowBaselineTrailPoints * point);
+
+                // Only move SL up, never down
+                if(new_sl > current_sl || current_sl == 0)
                 {
-                    tracked_positions[tracking_index].atr_management_active = true;
-                    Print("  ATR trailing stop management is now ACTIVE");
-                }
+                    MqlTradeRequest request = {};
+                    MqlTradeResult result = {};
 
-                //--- ATR-based trailing stop logic
-                int current_timeframe_level = tracked_positions[tracking_index].timeframe_level;
-                int max_timeframe_level = GetMaxTimeframeLevel();
+                    request.action = TRADE_ACTION_SLTP;
+                    request.symbol = _Symbol;
+                    request.position = ticket;
+                    request.sl = NormalizeDouble(new_sl, _Digits);
+                    request.tp = current_tp;
 
-                // If using below baseline method, lock to M1
-                if(tracked_positions[tracking_index].use_below_baseline_method)
-                {
-                    current_timeframe_level = 0;
-                    max_timeframe_level = 0;
-                }
-
-                // Check if we're on a new bar for this timeframe
-                ENUM_TIMEFRAMES current_tf = GetTimeframeFromLevel(current_timeframe_level);
-                datetime current_bar_time = iTime(_Symbol, current_tf, 0);
-
-                if(current_bar_time != tracked_positions[tracking_index].last_bar_time)
-                {
-                    tracked_positions[tracking_index].last_bar_time = current_bar_time;
-
-                    // Get ATR_Trend_Ind value for current timeframe
-                    double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_BUY);
-
-                    if(atr_stop_value > 0)
+                    if(OrderSend(request, result))
                     {
-                        // For BUY positions, ATR stop is below price (buffer 3)
-                        // Check if new stop is better than current stop
-                        if(atr_stop_value > current_sl || current_sl == 0)
+                        Print("--- Fixed Points Trailing Stop Updated (BUY) ---");
+                        Print("  Ticket: ", ticket);
+                        Print("  New SL: ", DoubleToString(new_sl, _Digits));
+                        Print("  Old SL: ", DoubleToString(current_sl, _Digits));
+                        Print("  Trail Points: ", BelowBaselineTrailPoints);
+                    }
+                }
+            }
+            // Above Baseline: ATR_Trend_Ind trailing (wait period required)
+            else
+            {
+                double distance_from_breakeven = current_price - position_breakeven_price;
+                double distance_in_R = distance_from_breakeven / position_R;
+
+                // Activate ATR management when wait period is complete
+                if(distance_in_R >= WaitPeriod_R)
+                {
+                    if(!tracked_positions[tracking_index].wait_period_logged)
+                    {
+                        Print("--- BUY POSITION: Above Baseline - Wait period completed ---");
+                        Print("  Ticket: ", ticket);
+                        Print("  Current Price: ", DoubleToString(current_price, _Digits));
+                        Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
+                        Print("  Position's R value: ", DoubleToString(position_R, _Digits));
+                        Print("  Activating ATR_Trend_Ind trailing stop management");
+
+                        tracked_positions[tracking_index].wait_period_logged = true;
+                    }
+
+                    // Activate ATR management
+                    if(!tracked_positions[tracking_index].atr_management_active)
+                    {
+                        tracked_positions[tracking_index].atr_management_active = true;
+                        Print("  ATR_Trend_Ind trailing is now ACTIVE");
+                    }
+
+                    //--- ATR_Trend_Ind trailing stop logic
+                    int current_timeframe_level = tracked_positions[tracking_index].timeframe_level;
+                    int max_timeframe_level = GetMaxTimeframeLevel();
+
+                    // Check if we're on a new bar for this timeframe
+                    ENUM_TIMEFRAMES current_tf = GetTimeframeFromLevel(current_timeframe_level);
+                    datetime current_bar_time = iTime(_Symbol, current_tf, 0);
+
+                    if(current_bar_time != tracked_positions[tracking_index].last_bar_time)
+                    {
+                        tracked_positions[tracking_index].last_bar_time = current_bar_time;
+
+                        // Get ATR_Trend_Ind value for current timeframe
+                        double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_BUY);
+
+                        if(atr_stop_value > 0)
                         {
-                            // Attempt to update stop loss
-                            MqlTradeRequest request = {};
-                            MqlTradeResult result = {};
-
-                            request.action = TRADE_ACTION_SLTP;
-                            request.symbol = _Symbol;
-                            request.position = ticket;
-                            request.sl = NormalizeDouble(atr_stop_value, _Digits);
-                            request.tp = current_tp;
-
-                            if(OrderSend(request, result))
+                            // For BUY positions, ATR stop is below price (buffer 3)
+                            // Check if new stop is better than current stop
+                            if(atr_stop_value > current_sl || current_sl == 0)
                             {
-                                Print("--- ATR Trailing Stop Updated (BUY) ---");
-                                Print("  Ticket: ", ticket);
-                                Print("  Timeframe: ", GetTimeframeName(current_timeframe_level));
-                                Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
-                                Print("  Old SL: ", DoubleToString(current_sl, _Digits));
+                                // Attempt to update stop loss
+                                MqlTradeRequest request = {};
+                                MqlTradeResult result = {};
 
-                                // Progress to next timeframe if not at max
-                                if(current_timeframe_level < max_timeframe_level)
+                                request.action = TRADE_ACTION_SLTP;
+                                request.symbol = _Symbol;
+                                request.position = ticket;
+                                request.sl = NormalizeDouble(atr_stop_value, _Digits);
+                                request.tp = current_tp;
+
+                                if(OrderSend(request, result))
                                 {
-                                    tracked_positions[tracking_index].timeframe_level++;
-                                    tracked_positions[tracking_index].last_bar_time = 0;  // Force check on next timeframe
-                                    Print("  Progressed to timeframe: ", GetTimeframeName(tracked_positions[tracking_index].timeframe_level));
+                                    Print("--- ATR_Trend_Ind Trailing Stop Updated (BUY) ---");
+                                    Print("  Ticket: ", ticket);
+                                    Print("  Timeframe: ", GetTimeframeName(current_timeframe_level));
+                                    Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
+                                    Print("  Old SL: ", DoubleToString(current_sl, _Digits));
 
-                                    // Clear cached value for new timeframe
-                                    tracked_positions[tracking_index].cached_atr_values[tracked_positions[tracking_index].timeframe_level] = 0;
+                                    // Progress to next timeframe if not at max
+                                    if(current_timeframe_level < max_timeframe_level)
+                                    {
+                                        tracked_positions[tracking_index].timeframe_level++;
+                                        tracked_positions[tracking_index].last_bar_time = 0;  // Force check on next timeframe
+                                        Print("  Progressed to timeframe: ", GetTimeframeName(tracked_positions[tracking_index].timeframe_level));
+
+                                        // Clear cached value for new timeframe
+                                        tracked_positions[tracking_index].cached_atr_values[tracked_positions[tracking_index].timeframe_level] = 0;
+                                    }
+                                    else
+                                    {
+                                        Print("  At maximum timeframe level");
+                                    }
                                 }
                                 else
                                 {
-                                    Print("  At maximum timeframe level");
+                                    Print("WARNING: Failed to update ATR_Trend_Ind trailing stop");
+                                    Print("  Error: ", result.retcode, " - ", GetErrorDescription(result.retcode));
                                 }
-                            }
-                            else
-                            {
-                                Print("WARNING: Failed to update ATR trailing stop");
-                                Print("  Error: ", result.retcode, " - ", GetErrorDescription(result.retcode));
                             }
                         }
                     }
@@ -1306,99 +1283,133 @@ void ManagePosition(ulong ticket)
             }
         }
 
-        //--- Check wait period after breakeven
+        //--- Trailing stop management after breakeven
         if(position_at_breakeven)
         {
-            double distance_from_breakeven = position_breakeven_price - current_price;
-            double distance_in_R = distance_from_breakeven / position_R;
-
-            // Activate ATR management when wait period is complete
-            if(distance_in_R >= WaitPeriod_R)
+            // Below Baseline: Fixed points trailing (starts immediately, no wait period)
+            if(tracked_positions[tracking_index].use_below_baseline_method)
             {
                 if(!tracked_positions[tracking_index].wait_period_logged)
                 {
-                    Print("--- SELL POSITION: Wait period completed ---");
+                    Print("--- SELL POSITION: Below Baseline - Starting fixed points trailing ---");
                     Print("  Ticket: ", ticket);
-                    Print("  Current Price: ", DoubleToString(current_price, _Digits));
-                    Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
-                    Print("  Position's R value: ", DoubleToString(position_R, _Digits));
-                    Print("  Activating ATR-based trailing stop management");
-
+                    Print("  Trail Points: ", BelowBaselineTrailPoints);
                     tracked_positions[tracking_index].wait_period_logged = true;
                 }
 
-                // Activate ATR management
-                if(!tracked_positions[tracking_index].atr_management_active)
+                // Calculate trailing stop price
+                double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+                double new_sl = current_price + (BelowBaselineTrailPoints * point);
+
+                // Only move SL down, never up
+                if(new_sl < current_sl || current_sl == 0)
                 {
-                    tracked_positions[tracking_index].atr_management_active = true;
-                    Print("  ATR trailing stop management is now ACTIVE");
-                }
+                    MqlTradeRequest request = {};
+                    MqlTradeResult result = {};
 
-                //--- ATR-based trailing stop logic
-                int current_timeframe_level = tracked_positions[tracking_index].timeframe_level;
-                int max_timeframe_level = GetMaxTimeframeLevel();
+                    request.action = TRADE_ACTION_SLTP;
+                    request.symbol = _Symbol;
+                    request.position = ticket;
+                    request.sl = NormalizeDouble(new_sl, _Digits);
+                    request.tp = current_tp;
 
-                // If using below baseline method, lock to M1
-                if(tracked_positions[tracking_index].use_below_baseline_method)
-                {
-                    current_timeframe_level = 0;
-                    max_timeframe_level = 0;
-                }
-
-                // Check if we're on a new bar for this timeframe
-                ENUM_TIMEFRAMES current_tf = GetTimeframeFromLevel(current_timeframe_level);
-                datetime current_bar_time = iTime(_Symbol, current_tf, 0);
-
-                if(current_bar_time != tracked_positions[tracking_index].last_bar_time)
-                {
-                    tracked_positions[tracking_index].last_bar_time = current_bar_time;
-
-                    // Get ATR_Trend_Ind value for current timeframe
-                    double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_SELL);
-
-                    if(atr_stop_value > 0)
+                    if(OrderSend(request, result))
                     {
-                        // For SELL positions, ATR stop is above price (buffer 2)
-                        // Check if new stop is better than current stop
-                        if(atr_stop_value < current_sl || current_sl == 0)
+                        Print("--- Fixed Points Trailing Stop Updated (SELL) ---");
+                        Print("  Ticket: ", ticket);
+                        Print("  New SL: ", DoubleToString(new_sl, _Digits));
+                        Print("  Old SL: ", DoubleToString(current_sl, _Digits));
+                        Print("  Trail Points: ", BelowBaselineTrailPoints);
+                    }
+                }
+            }
+            // Above Baseline: ATR_Trend_Ind trailing (wait period required)
+            else
+            {
+                double distance_from_breakeven = position_breakeven_price - current_price;
+                double distance_in_R = distance_from_breakeven / position_R;
+
+                // Activate ATR management when wait period is complete
+                if(distance_in_R >= WaitPeriod_R)
+                {
+                    if(!tracked_positions[tracking_index].wait_period_logged)
+                    {
+                        Print("--- SELL POSITION: Above Baseline - Wait period completed ---");
+                        Print("  Ticket: ", ticket);
+                        Print("  Current Price: ", DoubleToString(current_price, _Digits));
+                        Print("  Distance since breakeven was reached: ", DoubleToString(distance_in_R, 2), " R");
+                        Print("  Position's R value: ", DoubleToString(position_R, _Digits));
+                        Print("  Activating ATR_Trend_Ind trailing stop management");
+
+                        tracked_positions[tracking_index].wait_period_logged = true;
+                    }
+
+                    // Activate ATR management
+                    if(!tracked_positions[tracking_index].atr_management_active)
+                    {
+                        tracked_positions[tracking_index].atr_management_active = true;
+                        Print("  ATR_Trend_Ind trailing is now ACTIVE");
+                    }
+
+                    //--- ATR_Trend_Ind trailing stop logic
+                    int current_timeframe_level = tracked_positions[tracking_index].timeframe_level;
+                    int max_timeframe_level = GetMaxTimeframeLevel();
+
+                    // Check if we're on a new bar for this timeframe
+                    ENUM_TIMEFRAMES current_tf = GetTimeframeFromLevel(current_timeframe_level);
+                    datetime current_bar_time = iTime(_Symbol, current_tf, 0);
+
+                    if(current_bar_time != tracked_positions[tracking_index].last_bar_time)
+                    {
+                        tracked_positions[tracking_index].last_bar_time = current_bar_time;
+
+                        // Get ATR_Trend_Ind value for current timeframe
+                        double atr_stop_value = GetATRTrendIndValue(tracking_index, current_timeframe_level, POSITION_TYPE_SELL);
+
+                        if(atr_stop_value > 0)
                         {
-                            // Attempt to update stop loss
-                            MqlTradeRequest request = {};
-                            MqlTradeResult result = {};
-
-                            request.action = TRADE_ACTION_SLTP;
-                            request.symbol = _Symbol;
-                            request.position = ticket;
-                            request.sl = NormalizeDouble(atr_stop_value, _Digits);
-                            request.tp = current_tp;
-
-                            if(OrderSend(request, result))
+                            // For SELL positions, ATR stop is above price (buffer 2)
+                            // Check if new stop is better than current stop
+                            if(atr_stop_value < current_sl || current_sl == 0)
                             {
-                                Print("--- ATR Trailing Stop Updated (SELL) ---");
-                                Print("  Ticket: ", ticket);
-                                Print("  Timeframe: ", GetTimeframeName(current_timeframe_level));
-                                Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
-                                Print("  Old SL: ", DoubleToString(current_sl, _Digits));
+                                // Attempt to update stop loss
+                                MqlTradeRequest request = {};
+                                MqlTradeResult result = {};
 
-                                // Progress to next timeframe if not at max
-                                if(current_timeframe_level < max_timeframe_level)
+                                request.action = TRADE_ACTION_SLTP;
+                                request.symbol = _Symbol;
+                                request.position = ticket;
+                                request.sl = NormalizeDouble(atr_stop_value, _Digits);
+                                request.tp = current_tp;
+
+                                if(OrderSend(request, result))
                                 {
-                                    tracked_positions[tracking_index].timeframe_level++;
-                                    tracked_positions[tracking_index].last_bar_time = 0;  // Force check on next timeframe
-                                    Print("  Progressed to timeframe: ", GetTimeframeName(tracked_positions[tracking_index].timeframe_level));
+                                    Print("--- ATR_Trend_Ind Trailing Stop Updated (SELL) ---");
+                                    Print("  Ticket: ", ticket);
+                                    Print("  Timeframe: ", GetTimeframeName(current_timeframe_level));
+                                    Print("  New SL: ", DoubleToString(atr_stop_value, _Digits));
+                                    Print("  Old SL: ", DoubleToString(current_sl, _Digits));
 
-                                    // Clear cached value for new timeframe
-                                    tracked_positions[tracking_index].cached_atr_values[tracked_positions[tracking_index].timeframe_level] = 0;
+                                    // Progress to next timeframe if not at max
+                                    if(current_timeframe_level < max_timeframe_level)
+                                    {
+                                        tracked_positions[tracking_index].timeframe_level++;
+                                        tracked_positions[tracking_index].last_bar_time = 0;  // Force check on next timeframe
+                                        Print("  Progressed to timeframe: ", GetTimeframeName(tracked_positions[tracking_index].timeframe_level));
+
+                                        // Clear cached value for new timeframe
+                                        tracked_positions[tracking_index].cached_atr_values[tracked_positions[tracking_index].timeframe_level] = 0;
+                                    }
+                                    else
+                                    {
+                                        Print("  At maximum timeframe level");
+                                    }
                                 }
                                 else
                                 {
-                                    Print("  At maximum timeframe level");
+                                    Print("WARNING: Failed to update ATR_Trend_Ind trailing stop");
+                                    Print("  Error: ", result.retcode, " - ", GetErrorDescription(result.retcode));
                                 }
-                            }
-                            else
-                            {
-                                Print("WARNING: Failed to update ATR trailing stop");
-                                Print("  Error: ", result.retcode, " - ", GetErrorDescription(result.retcode));
                             }
                         }
                     }
