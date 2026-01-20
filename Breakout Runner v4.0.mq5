@@ -25,6 +25,12 @@ enum ENUM_MAX_TIMEFRAME
     MAX_TF_D1    // D1
 };
 
+enum ENUM_MANAGEMENT_METHOD
+{
+    METHOD_BASELINE_BALANCE,  // Baseline Balance
+    METHOD_EQUITY_HIGH        // Equity High
+};
+
 //--- Input parameters
 input string    OrderTime = "09:00";                    // Time to place orders (HH:MM)
 input string    OrderDeleteTime = "22:00";              // Time to delete pending orders (HH:MM)
@@ -44,11 +50,13 @@ input int       MagicNumber = 240100;                   // Magic Number
 
 // Advanced Trade Management
 input group "=== Advanced Trade Management ==="
-input double   BaselineBalance = 10000.0;               // Baseline Balance
-input int      ATRTrendPeriod = 10;                     // ATR Period for ATR_Trend_Ind (Above Baseline)
-input double   ATRModifier = 3.0;                       // ATR Modifier for ATR_Trend_Ind (Above Baseline)
-input ENUM_MAX_TIMEFRAME MaxTimeframe = MAX_TF_D1;      // Maximum Timeframe for Progression (Above Baseline)
-input int      BelowBaselineTrailPoints = 25;           // Trailing Stop Points (Below Baseline)
+input ENUM_MANAGEMENT_METHOD ManagementMethod = METHOD_BASELINE_BALANCE;  // Management Method Selection
+input double   BaselineBalance = 10000.0;               // Baseline Balance (for Baseline Method)
+input double   EquityHighTolerance = 1.0;               // Equity High Tolerance % (for Equity High Method)
+input int      ATRTrendPeriod = 10;                     // ATR Period for ATR_Trend_Ind (ATR_Trend_Ind Method)
+input double   ATRModifier = 3.0;                       // ATR Modifier for ATR_Trend_Ind (ATR_Trend_Ind Method)
+input ENUM_MAX_TIMEFRAME MaxTimeframe = MAX_TF_D1;      // Maximum Timeframe for Progression (ATR_Trend_Ind Method)
+input int      BelowBaselineTrailPoints = 25;           // Trailing Stop Points (Fixed Points Method)
 
 // ADX Filter
 input group "=== ADX Filter ==="
@@ -64,6 +72,10 @@ bool orders_deleted_today = false;
 datetime last_order_date = 0;
 datetime last_delete_date = 0;
 double current_R = 0;
+
+// Equity high tracking
+const string EQUITY_HIGH_GLOBAL_VAR = "BreakoutRunner_v4_EquityHigh";
+double equity_high = 0;
 
 // ATR_Trend_Ind indicator handles for all timeframes
 int atr_trend_handle_M1 = INVALID_HANDLE;
@@ -147,6 +159,19 @@ int OnInit()
 
     Print("ATR_Trend_Ind indicators created successfully for all timeframes");
 
+    //--- Initialize equity high tracking
+    if(GlobalVariableCheck(EQUITY_HIGH_GLOBAL_VAR))
+    {
+        equity_high = GlobalVariableGet(EQUITY_HIGH_GLOBAL_VAR);
+        Print("Equity High loaded from global variable: ", DoubleToString(equity_high, 2));
+    }
+    else
+    {
+        equity_high = AccountInfoDouble(ACCOUNT_EQUITY);
+        GlobalVariableSet(EQUITY_HIGH_GLOBAL_VAR, equity_high);
+        Print("Equity High initialized to current equity: ", DoubleToString(equity_high, 2));
+    }
+
     Print("Settings:");
     Print("  - Order Placement Time: ", OrderTime);
     Print("  - Order Delete Time: ", OrderDeleteTime);
@@ -167,8 +192,17 @@ int OnInit()
     Print("  - Magic Number: ", MagicNumber);
     Print("");
     Print("Advanced Trade Management:");
-    Print("  - Baseline Balance: ", BaselineBalance);
-    Print("  Above Baseline (ATR_Trend_Ind Trailing):");
+    Print("  - Management Method: ", (ManagementMethod == METHOD_BASELINE_BALANCE ? "Baseline Balance" : "Equity High"));
+    if(ManagementMethod == METHOD_BASELINE_BALANCE)
+    {
+        Print("  - Baseline Balance: ", BaselineBalance);
+    }
+    else
+    {
+        Print("  - Equity High: ", DoubleToString(equity_high, 2));
+        Print("  - Equity High Tolerance: ", EquityHighTolerance, "%");
+    }
+    Print("  ATR_Trend_Ind Trailing (when above threshold):");
     Print("    - ATR Trend Period: ", ATRTrendPeriod);
     Print("    - ATR Modifier: ", ATRModifier);
     string maxTfStr = "";
@@ -183,7 +217,7 @@ int OnInit()
         case MAX_TF_D1: maxTfStr = "D1"; break;
     }
     Print("    - Max Timeframe: ", maxTfStr);
-    Print("  Below Baseline (Fixed Points Trailing):");
+    Print("  Fixed Points Trailing (when below threshold):");
     Print("    - Trail Points: ", BelowBaselineTrailPoints);
     Print("");
     Print("ADX Filter:");
@@ -240,6 +274,17 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
+    //--- Update equity high if using equity high method
+    if(ManagementMethod == METHOD_EQUITY_HIGH)
+    {
+        double current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        if(current_equity > equity_high)
+        {
+            equity_high = current_equity;
+            GlobalVariableSet(EQUITY_HIGH_GLOBAL_VAR, equity_high);
+        }
+    }
+
     //--- Clean up tracking for any closed positions
     CleanupClosedPositions();
 
@@ -269,10 +314,27 @@ void AddPositionTracking(ulong ticket, double entry_R_value)
     tracked_positions[tracked_positions_count].atr_management_active = false;
     tracked_positions[tracked_positions_count].timeframe_level = 0;  // Start at M1
 
-    // Lock management method based on current balance vs baseline
-    double current_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    tracked_positions[tracked_positions_count].use_below_baseline_method = (current_balance < BaselineBalance);
+    // Lock management method based on selected method
+    bool use_fixed_points_method = false;
+    string method_desc = "";
 
+    if(ManagementMethod == METHOD_BASELINE_BALANCE)
+    {
+        // Baseline Balance method
+        double current_balance = AccountInfoDouble(ACCOUNT_BALANCE);
+        use_fixed_points_method = (current_balance < BaselineBalance);
+        method_desc = "Baseline Balance (" + DoubleToString(current_balance, 2) + " vs " + DoubleToString(BaselineBalance, 2) + ")";
+    }
+    else
+    {
+        // Equity High method
+        double current_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+        double equity_threshold = equity_high * (1.0 - EquityHighTolerance / 100.0);
+        use_fixed_points_method = (current_equity < equity_threshold);
+        method_desc = "Equity High (" + DoubleToString(current_equity, 2) + " vs " + DoubleToString(equity_threshold, 2) + ")";
+    }
+
+    tracked_positions[tracked_positions_count].use_below_baseline_method = use_fixed_points_method;
     tracked_positions[tracked_positions_count].last_bar_time = 0;
 
     // Initialize cached ATR values
@@ -281,8 +343,9 @@ void AddPositionTracking(ulong ticket, double entry_R_value)
 
     tracked_positions_count++;
 
-    Print("Position tracking added: Ticket ", ticket, ", Entry R: ", DoubleToString(entry_R_value, _Digits),
-          ", Below baseline method: ", (tracked_positions[tracked_positions_count - 1].use_below_baseline_method ? "YES" : "NO"));
+    Print("Position tracking added: Ticket ", ticket, ", Entry R: ", DoubleToString(entry_R_value, _Digits));
+    Print("  Management method: ", method_desc);
+    Print("  Using: ", (use_fixed_points_method ? "Fixed Points Trailing" : "ATR_Trend_Ind Trailing"));
 }
 
 //+------------------------------------------------------------------+
