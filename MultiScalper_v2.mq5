@@ -11,7 +11,7 @@
          enum              enumLotType{Fixed_Lots=0, Pct_of_Balance=1, Pct_of_Equity=2, Pct_of_Free_Margin=3};
          enum              StartHour{Inactive=0, _0100=1, _0200=2, _0300=3, _0400=4, _0500=5, _0600=6, _0700=7, _0800=8, _0900=9, _1000=10, _1100=11, _1200=12, _1300=13, _1400=14, _1500=15, _1600=16, _1700=17, _1800=18, _1900=19, _2000=20, _2100=21, _2200=22, _2300=23};
          enum              EndHour{Inactive=0, _0100=1, _0200=2, _0300=3, _0400=4, _0500=5, _0600=6, _0700=7, _0800=8, _0900=9, _1000=10, _1100=11, _1200=12, _1300=13, _1400=14, _1500=15, _1600=16, _1700=17, _1800=18, _1900=19, _2000=20, _2100=21, _2200=22, _2300=23};
-         int               handleRSI, handleMovAvg, handleADX;
+         int               handleRSI, handleMovAvg, handleADX, handleADXDynamic;
 
          double            BegofDayBalance;
          double            DD_1D_Pct=0, Prf_1D_Pct=0;
@@ -85,6 +85,16 @@
 
    SmartExitTracker buyTracker;
    SmartExitTracker sellTracker;
+
+   input group "=== Dynamic BarsN Settings ==="
+
+         input bool              DynamicBarsNOn          = true;           // Enable Dynamic BarsN
+         input ENUM_TIMEFRAMES   ADXDynTimeframe         = PERIOD_M5;     // ADX Timeframe for Dynamic BarsN
+         input int               ADXDynPeriod            = 14;            // ADX Period for Dynamic BarsN
+
+         int               ActiveBarsN;             // Current active BarsN value
+         int               ActiveExpirationBars;    // Current active ExpirationBars value
+         int               CurrentADXLevel = -1;    // Track current ADX level for change logging
 
    input group "=== News Filter ==="
 
@@ -192,6 +202,22 @@ int OnInit(){
    ResetSmartExitTracker(buyTracker);
    ResetSmartExitTracker(sellTracker);
 
+   // Initialize Dynamic BarsN ADX handle
+   if(DynamicBarsNOn){
+      handleADXDynamic = iADX(_Symbol, ADXDynTimeframe, ADXDynPeriod);
+      if(handleADXDynamic == INVALID_HANDLE){
+         Print("Error creating ADX indicator handle for Dynamic BarsN");
+         return(INIT_FAILED);
+      }
+      ActiveBarsN = BarsN;
+      ActiveExpirationBars = ExpirationBars;
+      CurrentADXLevel = -1;
+   }
+   else{
+      ActiveBarsN = BarsN;
+      ActiveExpirationBars = ExpirationBars;
+   }
+
    return(INIT_SUCCEEDED);
 }
 
@@ -199,6 +225,9 @@ int OnInit(){
 void OnDeinit(const int reason){
    if(handleADX != INVALID_HANDLE){
       IndicatorRelease(handleADX);
+   }
+   if(handleADXDynamic != INVALID_HANDLE){
+      IndicatorRelease(handleADXDynamic);
    }
 }
 
@@ -213,6 +242,9 @@ void OnTick(){
    }
 
    if(!IsNewBar()) return;
+
+   // Update Dynamic BarsN on every new bar
+   UpdateDynamicBarsN();
 
    // Update bar counts for Smart Exit tracking on new bar
    if(SmartExitOn){
@@ -505,6 +537,93 @@ bool CheckSmartExitConditions(SmartExitTracker &tracker, bool isBuy){
 }
 
 //+------------------------------------------------------------------+
+//| Dynamic BarsN Functions                                           |
+//+------------------------------------------------------------------+
+
+void UpdateDynamicBarsN(){
+   if(!DynamicBarsNOn) return;
+
+   double ADXVal[];
+   ArraySetAsSeries(ADXVal, true);
+
+   if(CopyBuffer(handleADXDynamic, 0, 0, 1, ADXVal) <= 0){
+      Print("Error reading ADX for Dynamic BarsN");
+      return;
+   }
+
+   double adxNow = ADXVal[0];
+   int newLevel = -1;
+
+   // Evaluate from highest threshold down so most specific match wins
+   if(adxNow > 50){
+      newLevel = 5;
+      ActiveBarsN = 15;
+      ActiveExpirationBars = 100;
+   }
+   else if(adxNow > 40){
+      newLevel = 4;
+      ActiveBarsN = 30;
+      ActiveExpirationBars = 100;
+   }
+   else if(adxNow > 30){
+      newLevel = 3;
+      ActiveBarsN = 50;
+      ActiveExpirationBars = 100;
+   }
+   else if(adxNow >= 25){
+      newLevel = 2;
+      ActiveBarsN = 80;
+      ActiveExpirationBars = 120;
+   }
+   else if(adxNow >= 20){
+      newLevel = 1;
+      ActiveBarsN = 100;
+      ActiveExpirationBars = 170;
+   }
+   else{
+      newLevel = 0;
+      ActiveBarsN = 100;
+      ActiveExpirationBars = 300;
+   }
+
+   // Log only when ADX level changes
+   if(newLevel != CurrentADXLevel){
+      string tfString = GetTimeframeString(ADXDynTimeframe);
+      Print("ADX Level switched to: ", CurrentADXLevel, " | ADX ", tfString, " = ",
+            DoubleToString(adxNow, 2), " | BarsN = ", ActiveBarsN,
+            " | ExpirationBars = ", ActiveExpirationBars);
+      CurrentADXLevel = newLevel;
+   }
+}
+
+string GetTimeframeString(ENUM_TIMEFRAMES tf){
+   switch(tf){
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M2:  return "M2";
+      case PERIOD_M3:  return "M3";
+      case PERIOD_M4:  return "M4";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M6:  return "M6";
+      case PERIOD_M10: return "M10";
+      case PERIOD_M12: return "M12";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M20: return "M20";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H2:  return "H2";
+      case PERIOD_H3:  return "H3";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_H6:  return "H6";
+      case PERIOD_H8:  return "H8";
+      case PERIOD_H12: return "H12";
+      case PERIOD_D1:  return "D1";
+      case PERIOD_W1:  return "W1";
+      case PERIOD_MN1: return "MN1";
+      default:         return "Unknown";
+   }
+}
+
+//+------------------------------------------------------------------+
 
 
 bool IsNewBar(){
@@ -519,11 +638,12 @@ bool IsNewBar(){
 
 double findHigh(){
 
+      int barsN = ActiveBarsN;
       double highestHigh = 0;
 
       for(int i = 0; i < 200; i++){
          double high = iHigh(_Symbol,Timeframe,i);
-         if(i > BarsN && iHighest(_Symbol,Timeframe,MODE_HIGH,BarsN*2+1,i-BarsN) == i){
+         if(i > barsN && iHighest(_Symbol,Timeframe,MODE_HIGH,barsN*2+1,i-barsN) == i){
             if(high > highestHigh){
                return high;
             }
@@ -534,10 +654,11 @@ double findHigh(){
 }
 
 double findLow(){
+      int barsN = ActiveBarsN;
       double lowestLow = DBL_MAX;
       for(int i = 0; i < 200; i++){
          double low = iLow(_Symbol,Timeframe,i);
-         if(i > BarsN && iLowest(_Symbol,Timeframe,MODE_LOW,BarsN*2+1,i-BarsN) == i){
+         if(i > barsN && iLowest(_Symbol,Timeframe,MODE_LOW,barsN*2+1,i-barsN) == i){
             if(low < lowestLow){
                return low;
             }
@@ -597,7 +718,7 @@ void executeBuy(double entry){
          double lots = 0.01;
          if(RiskPercent > 0) lots = calcLots(entry-sl);
 
-         datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationBars * PeriodSeconds(Timeframe);
+         datetime expiration = iTime(_Symbol,Timeframe,0) + ActiveExpirationBars * PeriodSeconds(Timeframe);
 
          trade.BuyStop(lots,entry,_Symbol,sl,tp,ORDER_TIME_SPECIFIED,expiration);
 }
@@ -613,7 +734,7 @@ void executeSell(double entry){
          double lots = 0.01;
          if(RiskPercent > 0) lots = calcLots(sl-entry);
 
-         datetime expiration = iTime(_Symbol,Timeframe,0) + ExpirationBars * PeriodSeconds(Timeframe);
+         datetime expiration = iTime(_Symbol,Timeframe,0) + ActiveExpirationBars * PeriodSeconds(Timeframe);
 
            trade.SellStop(lots,entry,_Symbol,sl,tp,ORDER_TIME_SPECIFIED,expiration);
 
