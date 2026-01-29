@@ -236,19 +236,15 @@ void OnTick(){
 
    TrailStop();
 
-   // Smart Exit check - runs on every tick for responsive exits
-   if(SmartExitOn){
-      CheckSmartExit();
-   }
-
    if(!IsNewBar()) return;
 
    // Update Dynamic BarsN on every new bar
    UpdateDynamicBarsN();
 
-   // Update bar counts for Smart Exit tracking on new bar
+   // Smart Exit check - runs on new bar using completed bar data only
    if(SmartExitOn){
       UpdateSmartExitBarCounts();
+      CheckSmartExit();
    }
 
    UpdateInitialBalances();
@@ -452,57 +448,61 @@ void CheckSmartExit(){
 
 bool CheckSmartExitConditions(SmartExitTracker &tracker, bool isBuy){
    if(!tracker.isTracking) return false;
+   if(tracker.barsSinceEntry < 1) return false;  // Need at least 1 completed bar
 
-   // Get current DI values
+   // Get completed bar DI values (index 1 = last closed bar, index 2 = bar before that)
    double DIplus[], DIminus[];
    ArraySetAsSeries(DIplus, true);
    ArraySetAsSeries(DIminus, true);
 
-   // Need enough bars for condition 1 check
-   int barsNeeded = DI_DeclineBars + 1;
+   int barsNeeded = DI_DeclineBars + 2;  // +2 to account for skipping bar 0
 
    if(CopyBuffer(handleADX, 1, 0, barsNeeded, DIplus) <= 0 ||
       CopyBuffer(handleADX, 2, 0, barsNeeded, DIminus) <= 0){
       return false;
    }
 
-   double currentDIplus = DIplus[0];
-   double currentDIminus = DIminus[0];
-   double prevDIplus = DIplus[1];  // Previous bar for crossover detection
-   double prevDIminus = DIminus[1];
+   // Use completed bars only: index 1 = last closed bar, index 2 = bar before that
+   double lastDIplus = DIplus[1];
+   double lastDIminus = DIminus[1];
+   double prevDIplus = DIplus[2];
+   double prevDIminus = DIminus[2];
 
-   double currentPrice = isBuy ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // Price reversal using last closed bar's close price
+   double lastClose = iClose(_Symbol, Timeframe, 1);
    double slDistance = MathAbs(tracker.entryPrice - tracker.originalSL);
-   double priceReversal = isBuy ? (tracker.entryPrice - currentPrice) : (currentPrice - tracker.entryPrice);
+   double priceReversal = isBuy ? (tracker.entryPrice - lastClose) : (lastClose - tracker.entryPrice);
    double reversalPct = (slDistance > 0) ? (priceReversal / slDistance) * 100 : 0;
 
-   // Condition 2: DI Crossover (check on every tick)
-   if(isBuy){
-      // For buy: exit when DI- crosses above DI+ (bearish signal)
-      if(prevDIplus > prevDIminus && currentDIminus >= currentDIplus){
-         Print("Smart Exit Condition 2: DI- crossed above DI+ for BUY position");
-         Print("  Previous: DI+=", prevDIplus, " DI-=", prevDIminus);
-         Print("  Current: DI+=", currentDIplus, " DI-=", currentDIminus);
-         return true;
-      }
-   }
-   else{
-      // For sell: exit when DI+ crosses above DI- (bullish signal)
-      if(prevDIminus > prevDIplus && currentDIplus >= currentDIminus){
-         Print("Smart Exit Condition 2: DI+ crossed above DI- for SELL position");
-         Print("  Previous: DI+=", prevDIplus, " DI-=", prevDIminus);
-         Print("  Current: DI+=", currentDIplus, " DI-=", currentDIminus);
-         return true;
-      }
-   }
-
-   // Condition 3: Rapid price reversal within first N bars
+   // Condition 3: Rapid price reversal within first N bars after entry
    if(tracker.condition3Active && tracker.barsSinceEntry <= RapidReversalBars){
       if(reversalPct >= PriceReversalPct){
          Print("Smart Exit Condition 3: Rapid reversal of ", DoubleToString(reversalPct, 2),
-               "% within ", tracker.barsSinceEntry, " bars for ", (isBuy ? "BUY" : "SELL"));
-         Print("  Entry=", tracker.entryPrice, " Current=", currentPrice, " SL Distance=", slDistance);
+               "% at bar ", tracker.barsSinceEntry, " for ", (isBuy ? "BUY" : "SELL"));
+         Print("  Entry=", tracker.entryPrice, " LastClose=", lastClose, " SL Distance=", slDistance);
          return true;
+      }
+   }
+
+   // Condition 2: DI Crossover on completed bars (skip first 3 bars to let trade develop)
+   if(tracker.barsSinceEntry >= 3){
+      if(isBuy){
+         // For buy: exit when DI- crosses above DI+ (bearish signal)
+         if(prevDIplus > prevDIminus && lastDIminus >= lastDIplus){
+            Print("Smart Exit Condition 2: DI- crossed above DI+ for BUY position at bar ", tracker.barsSinceEntry);
+            Print("  Bar -2: DI+=", prevDIplus, " DI-=", prevDIminus);
+            Print("  Bar -1: DI+=", lastDIplus, " DI-=", lastDIminus);
+            return true;
+         }
+      }
+      else{
+         // For sell: exit when DI+ crosses above DI- (bullish signal)
+         if(prevDIminus > prevDIplus && lastDIplus >= lastDIminus){
+            Print("Smart Exit Condition 2: DI+ crossed above DI- for SELL position at bar ", tracker.barsSinceEntry);
+            Print("  Bar -2: DI+=", prevDIplus, " DI-=", prevDIminus);
+            Print("  Bar -1: DI+=", lastDIplus, " DI-=", lastDIminus);
+            return true;
+         }
       }
    }
 
@@ -513,11 +513,11 @@ bool CheckSmartExitConditions(SmartExitTracker &tracker, bool isBuy){
       double DIatEntry, DIatBar5;
       if(isBuy){
          DIatEntry = tracker.entryDIplus;
-         DIatBar5 = currentDIplus;
+         DIatBar5 = lastDIplus;
       }
       else{
          DIatEntry = tracker.entryDIminus;
-         DIatBar5 = currentDIminus;
+         DIatBar5 = lastDIminus;
       }
 
       double DIDecline = (DIatEntry > 0) ? ((DIatEntry - DIatBar5) / DIatEntry) * 100 : 0;
